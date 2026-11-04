@@ -10,7 +10,7 @@ import PricingKnowledge from "../components/PricingKnowledge.vue";
 import SampleDashboard from "../components/SampleDashboard.vue";
 import PortalCustomers from "../components/PortalCustomers.vue";
 import CrmGuide from "../components/CrmGuide.vue";
-import { FolderKanban, Users, BarChart3, Package, Settings, Truck, FileSpreadsheet, Wallet, BookOpen, Menu, PanelLeft } from "lucide-vue-next";
+import { FolderKanban, Users, BarChart3, Package, Settings, Truck, Wallet, BookOpen } from "lucide-vue-next";
 import type { ApiProduct } from "../api";
 
 const { locale } = useI18n();
@@ -28,8 +28,6 @@ const emailMode = ref('demo');
 const emailEnabled = ref(false);
 const me = ref({ username: "", name: "", role: "staff" });
 const passwordOpen = ref(false);
-const mobileNavOpen = ref(false);
-const railCollapsed = ref(false);
 const accountMenu = ref<HTMLDetailsElement>();
 function closeAccountMenu() { 
   if (accountMenu.value) {
@@ -49,14 +47,16 @@ const passwordForm = reactive({ current: "", next: "", confirm: "" });
 const users = ref<{ username: string; name: string; role: string; active: number }[]>([]);
 const newUser = reactive({ username: "", name: "", password: "", role: "staff" });
 const nav = computed(() => [
-  { key: "projects", label: tx("订单", "Orders") },
-  { key: "customers", label: tx("客户资料", "Customers") },
-  { key: "providers", label: tx("供应商", "Suppliers") },
-  { key: "pricing", label: tx("定价知识库", "Pricing knowledge") },
-  { key: "finance", label: tx("账款与返利", "Accounts & rebates") },
-  { key: "help", label: tx("操作指南", "Operating guide") },
-  { key: "dashboard", label: tx("分析看板", "Dashboard") },
-  { key: "products", label: tx("产品目录", "Product catalogue") },
+  { key: "dashboard", label: tx("Dashboard", "Dashboard") },
+  { key: "projects", label: tx("Orders", "Orders") },
+  { key: "shipments", label: tx("Shipment", "Shipment") },
+  { key: "customers", label: tx("Customer", "Customer") },
+  { key: "providers", label: tx("Supplier", "Supplier") },
+  { key: "pricing", label: tx("Price Knowledge", "Price Knowledge") },
+  { key: "finance", label: tx("Accounts and Rebates", "Accounts and Rebates") },
+  { key: "products", label: tx("Product", "Product") },
+  { key: "help", label: tx("Operating Guide", "Operating Guide") },
+  { key: "users", label: tx("Settings", "Settings") },
 ]);
 const pageTitle = computed(() => nav.value.find((item) => item.key === tab.value)?.label || tx("系统设置", "Settings"));
 
@@ -153,7 +153,6 @@ async function logout() {
 }
 
 function openTab(key: string) {
-  mobileNavOpen.value = false;
   void router.push(`/crm/${key}`);
   window.scrollTo({ top: 0 });
 }
@@ -164,43 +163,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <main class="page crm" :class="{ 'is-signed': signed, 'rail-collapsed': signed && railCollapsed }">
-    <aside v-if="signed" class="desk-rail" :class="{'mobile-open':mobileNavOpen, 'is-collapsed': railCollapsed}">
-      <div class="rail-brand"><span class="rail-label">VERA</span><button type="button" class="rail-collapse" :aria-expanded="!railCollapsed" :aria-label="railCollapsed ? tx('展开菜单','Expand menu') : tx('收起菜单','Collapse menu')" @click="railCollapsed = !railCollapsed"><PanelLeft :size="20" aria-hidden="true" /></button></div>
-      <button type="button" class="rail-mobile-toggle" :aria-expanded="mobileNavOpen" @click="mobileNavOpen=!mobileNavOpen"><Menu :size="20" aria-hidden="true" />{{ tx('菜单','Menu') }} · {{ pageTitle }}</button>
-      <button type="button" :class="{ current: tab === 'projects' }" @click="openTab('projects')">
-        <FolderKanban :size="20" aria-hidden="true" />
-        <span class="rail-label">{{ tx("订单", "Orders") }}</span>
-      </button>
-      <button type="button" :class="{ current: tab === 'customers' }" @click="openTab('customers')">
-        <Users :size="20" aria-hidden="true" />
-        <span class="rail-label">{{ tx("客户资料", "Customers") }}</span>
-      </button>
-      <button type="button" :class="{ current: tab === 'providers' }" @click="openTab('providers')"><Truck :size="20" aria-hidden="true" /><span class="rail-label">{{ tx('供应商', 'Suppliers') }}</span></button>
-      <button type="button" :class="{ current: tab === 'pricing' }" @click="openTab('pricing')"><BookOpen :size="20" aria-hidden="true" /><span class="rail-label">{{ tx('定价知识库', 'Pricing knowledge') }}</span></button>
-      <button type="button" :class="{ current: tab === 'finance' }" @click="openTab('finance')"><Wallet :size="20" aria-hidden="true" /><span class="rail-label">{{ tx('账款与返利', 'Accounts & rebates') }}</span></button>
-      <button type="button" :class="{ current: tab === 'dashboard' }" @click="openTab('dashboard')">
-        <BarChart3 :size="20" aria-hidden="true" />
-        <span class="rail-label">{{ tx("分析看板", "Dashboard") }}</span>
-      </button>
-      <button type="button" :class="{ current: tab === 'products' }" @click="openTab('products')">
-        <Package :size="20" aria-hidden="true" />
-        <span class="rail-label">{{ tx("产品目录", "Product catalogue") }}</span>
-      </button>
-      <button type="button" :class="{current:tab==='help'}" @click="openTab('help')"><BookOpen :size="20" aria-hidden="true" /><span class="rail-label">{{ tx('操作指南','Operating guide') }}</span></button>
-      <button v-if="me.role === 'admin'" type="button" :class="{ current: tab === 'users' }" @click="openTab('users')">
-        <Settings :size="20" aria-hidden="true" />
-        <span class="rail-label">{{ tx("系统设置", "Settings") }}</span>
-      </button>
-      <div class="rail-bottom">
-        <span class="user-avatar">{{ (me.name || "V").slice(0, 1) }}</span>
-        <div class="user-meta">
-          <strong>{{ me.name }}</strong>
-          <small>{{ me.role === "admin" ? tx("管理员", "Admin") : tx("销售", "Sales") }}</small>
-        </div>
-      </div>
-    </aside>
-
+  <main class="page crm" :class="{ 'is-signed': signed }">
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
     <p v-if="message" class="success" role="status">{{ message }}</p>
 
@@ -213,11 +176,19 @@ onMounted(() => {
     </form>
 
     <template v-else>
-      <header class="crm-bar">
-        <nav class="page-context" :aria-label="tx('当前位置', 'Breadcrumb')">
-          <span>VERA</span><span aria-hidden="true">/</span><span>CRM</span><span aria-hidden="true">/</span><strong aria-current="page">{{ pageTitle }}</strong>
-        </nav>
-        <details ref="accountMenu" class="account-menu" @keydown.esc="closeAccountMenu">
+      <nav class="top-nav" :aria-label="tx('主导航','Main navigation')">
+        <button v-for="item in nav" v-show="item.key !== 'users' || me.role === 'admin'" :key="item.key" type="button" :class="{ current: tab === item.key }" @click="openTab(item.key)">
+          <BarChart3 v-if="item.key==='dashboard'" :size="18" aria-hidden="true" />
+          <FolderKanban v-else-if="item.key==='projects'" :size="18" aria-hidden="true" />
+          <Truck v-else-if="item.key==='shipments' || item.key==='providers'" :size="18" aria-hidden="true" />
+          <Users v-else-if="item.key==='customers'" :size="18" aria-hidden="true" />
+          <BookOpen v-else-if="item.key==='pricing' || item.key==='help'" :size="18" aria-hidden="true" />
+          <Wallet v-else-if="item.key==='finance'" :size="18" aria-hidden="true" />
+          <Package v-else-if="item.key==='products'" :size="18" aria-hidden="true" />
+          <Settings v-else-if="item.key==='users'" :size="18" aria-hidden="true" />
+          <span>{{ item.label }}</span>
+        </button>
+        <details ref="accountMenu" class="account-menu">
           <summary :aria-label="tx('账户菜单', 'Account menu')" :title="me.name"><span>{{ (me.name || 'V').slice(0, 1) }}</span></summary>
           <div class="account-dropdown">
             <div class="account-identity"><strong>{{ me.name }}</strong><small>{{ me.role === 'admin' ? tx('管理员', 'Admin') : tx('员工', 'Staff') }}</small></div>
@@ -226,6 +197,11 @@ onMounted(() => {
             <button type="button" @click="logout(); closeAccountMenu()">{{ tx('退出', 'Sign out') }}</button>
           </div>
         </details>
+      </nav>
+      <header class="crm-bar">
+        <nav class="page-context" :aria-label="tx('当前位置', 'Breadcrumb')">
+          <span>VERA</span><span aria-hidden="true">/</span><span>CRM</span><span aria-hidden="true">/</span><strong aria-current="page">{{ pageTitle }}</strong>
+        </nav>
       </header>
       <form v-if="passwordOpen" class="password-form" @submit.prevent="changePassword">
         <label>{{ tx("当前密码", "Current password") }}<input v-model="passwordForm.current" type="password" autocomplete="current-password" required /></label>
@@ -234,7 +210,7 @@ onMounted(() => {
         <button :disabled="busy">{{ tx("保存密码", "Save password") }}</button>
       </form>
       <PricingKnowledge v-if="tab === 'pricing'" :admin="me.role === 'admin'" />
-      <ProjectDesk v-if="['projects','providers','finance'].includes(tab)" :key="tab" :workspace="tab" :email-enabled="emailEnabled" :email-mode="emailMode" :admin="me.role === 'admin'" />
+      <ProjectDesk v-if="['projects','shipments','providers','finance'].includes(tab)" :key="tab" :workspace="tab" :email-enabled="emailEnabled" :email-mode="emailMode" :admin="me.role === 'admin'" />
       <CrmGuide v-if="tab==='help'" :demo="emailMode!=='live'" :delivery-enabled="emailEnabled" />
       <PortalCustomers v-if="tab === 'customers'" :admin="me.role === 'admin'" />
       <SampleDashboard v-if="tab === 'dashboard'" />
@@ -400,4 +376,14 @@ th, .crm strong, .crm b { font-weight: var(--fw-emphasis); }
 @media(max-width:600px) { .crm .crm-bar { margin-bottom: 12px; } }
 .desk-rail .rail-mobile-toggle{display:none}
 @media(max-width:800px){.desk-rail .rail-mobile-toggle{display:flex;grid-column:1/-1}.desk-rail:not(.mobile-open)>button:not(.rail-mobile-toggle){display:none}.desk-rail{margin-bottom:10px!important}}
+.crm.is-signed,.crm.is-signed.rail-collapsed { padding: 18px clamp(14px, 2vw, 32px) 36px; }
+.top-nav { display:flex; align-items:center; gap:4px; min-height:60px; padding:8px 10px; margin:-18px calc(-1 * clamp(14px, 2vw, 32px)) 18px; background:#19392d; color:#e7eee9; overflow-x:auto; }
+.top-nav>button { flex:0 0 auto; display:flex; align-items:center; justify-content:center; gap:8px; min-height:44px; padding:8px 11px; border:0; border-radius:7px; background:transparent; color:inherit; font-size:13px; white-space:nowrap; }
+.top-nav>button:hover { background:#ffffff18; }
+.top-nav>button.current { background:#315844; color:white; }
+.top-nav .nav-brand { margin-right:auto; padding-inline:14px; font-size:16px; letter-spacing:.16em; font-weight:700; }
+.top-nav .account-menu { margin-left:auto; position:sticky; right:0; background:#19392d; }
+.top-nav .account-menu summary>span { background:#e4eee7; }
+.crm-bar { min-height:38px; padding-bottom:8px; margin-bottom:16px; }
+@media(max-width:800px) { .crm.is-signed,.crm.is-signed.rail-collapsed { padding:12px; } .top-nav { margin:-12px -12px 14px; gap:2px; } .top-nav .nav-brand { margin-right:0; } .top-nav>button { padding:8px; } .top-nav>button span { font-size:12px; } }
 </style>
