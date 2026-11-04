@@ -692,6 +692,34 @@ class ShipmentCreate(Batch):
         return None if v is None else iso_date(v)
 
 
+class ShipmentProgress(Input):
+    status: Literal['factory_departed', 'on_board', 'port_arrived']
+
+
+class ShipmentMilestones(Input):
+    factory_departed_at: str | None = None
+    on_board_at: str | None = None
+    port_arrived_at: str | None = None
+    warehouse_arrived_at: str | None = None
+
+    @field_validator('factory_departed_at', 'on_board_at', 'port_arrived_at', 'warehouse_arrived_at')
+    @classmethod
+    def valid_milestone_date(cls, v):
+        return None if v in (None, '') else iso_date(v)
+
+
+class OrderProgressUpdate(Input):
+    order_ids: list[str] = Field(min_length=1, max_length=200)
+    status: Literal['draft', 'pending_review', 'accepted', 'supplier_ordered', 'in_transit', 'ready', 'complete'] | None = None
+    payment_status: Literal['deposit_unpaid', 'deposit_received', 'paid'] | None = None
+
+    @model_validator(mode='after')
+    def has_progress(self):
+        if self.status is None and self.payment_status is None:
+            raise ValueError('Choose an order status or payment progress')
+        return self
+
+
 class ShipmentEta(Input):
     eta: str
 
@@ -1182,7 +1210,17 @@ def register(app, s):
         out = {k: v for k, v in shipment.items() if k != 'request_hash'}
         out.setdefault('name', shipment['id'])
         out.setdefault('eta', None)
-        out.setdefault('status', 'in_transit')
+        raw_status = out.get('status', 'in_transit')
+        status_map = {'in_transit': 'factory_departed', 'arrived': 'arrived_warehouse'}
+        out['status'] = status_map.get(raw_status, raw_status)
+        created_date = str(out.get('created_at') or '')[:10] or None
+        if raw_status == 'in_transit':
+            out.setdefault('factory_departed_at', created_date)
+        if raw_status == 'arrived':
+            out.setdefault('factory_departed_at', created_date)
+            out.setdefault('warehouse_arrived_at', str(out.get('arrived_at') or '')[:10] or created_date)
+        for field in ('factory_departed_at', 'on_board_at', 'port_arrived_at', 'warehouse_arrived_at'):
+            out.setdefault(field, None)
         if orders is not None:
             # Staff-only view: the purchase and landed-cost figures a batch is costed from.
             out['orders'] = [{'id': o['id'], 'order_number': o.get('order_number'), 'company': o.get('company'),
@@ -1230,11 +1268,10 @@ def register(app, s):
                         raise HTTPException(409, 'Only shutter orders join a sea shipment')
                     if order.get('shipment_id'):
                         raise HTTPException(409, 'Order already belongs to a shipment')
-                    order.update(shipment_id=sid, batch_name=name, status='in_transit')
+                    order.update(shipment_id=sid, batch_name=name)
                     if body.eta:
                         order.update(eta=body.eta, eta_source='batch')
                     set_cost_area(c, order)
-                    event(order, 'in_transit', actor, batch_id=sid, batch_name=name, eta=order.get('eta'))
                     put(c, 'project', order, order['customer_id'])
                     members.append(oid)
                     results.append({'order_id': oid, 'status': 'success'})
@@ -1242,8 +1279,47 @@ def register(app, s):
                     results.append({'order_id': oid, 'status': 'skipped', 'reason': error.detail})
             if not members:
                 raise HTTPException(409, 'No eligible shutter orders could join this shipment')
-            shipment = {'id': sid, 'name': name, 'eta': body.eta, 'status': 'in_transit', 'order_ids': members, 'results': results,
+            shipment = {'id': sid, 'name': name, 'eta': body.eta, 'status': 'planned', 'order_ids': members, 'results': results, 'history': [],
                         'request_hash': bodyhash(body), 'created_at': s.now(), 'actor': actor}
+            put(c, 'shipment', shipment)
+            return shipment_view(shipment)
+
+    @app.post('/api/operations/shipments/{sid}/progress')
+    def shipment_progress(sid: str, body: ShipmentProgress, actor=Depends(s.auth)):
+        next_stage = {'planned': 'factory_departed', 'in_transit': 'on_board', 'factory_departed': 'on_board',
+                      'on_board': 'port_arrived'}
+        milestone_for = {'factory_departed': 'factory_departed_at', 'on_board': 'on_board_at', 'port_arrived': 'port_arrived_at'}
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            shipment = get(c, sid, 'shipment')
+            shipment.setdefault('history', [])
+            current = {'in_transit': 'factory_departed', 'arrived': 'arrived_warehouse'}.get(shipment.get('status'), shipment.get('status', 'planned'))
+            if next_stage.get(current) != body.status:
+                raise HTTPException(409, f"Shipment can only advance one stage from {current}")
+            shipment['status'] = body.status
+            shipment[milestone_for[body.status]] = s.business_now().date().isoformat()
+            if body.status == 'factory_departed':
+                for oid in shipment['order_ids']:
+                    order = get(c, oid, 'project')
+                    if order.get('status') == 'supplier_ordered':
+                        order['status'] = 'in_transit'
+                        event(order, 'in_transit', actor, batch_id=sid, batch_name=shipment.get('name'), eta=order.get('eta'))
+                        put(c, 'project', order, order['customer_id'])
+            event(shipment, 'shipment_progress', actor, status=body.status)
+            put(c, 'shipment', shipment)
+            return shipment_view(shipment, [get(c, oid, 'project') for oid in shipment['order_ids']])
+
+    @app.post('/api/operations/shipments/{sid}/milestones')
+    def shipment_milestones(sid: str, body: ShipmentMilestones, actor=Depends(s.auth)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            shipment = get(c, sid, 'shipment')
+            shipment.setdefault('history', [])
+            fields = ('factory_departed_at', 'on_board_at', 'port_arrived_at', 'warehouse_arrived_at')
+            changes = {field: getattr(body, field) for field in fields}
+            previous = {field: shipment.get(field) for field in fields if shipment.get(field) != changes[field]}
+            shipment.update(changes)
+            event(shipment, 'shipment_milestones_updated', actor, previous=previous, milestones=changes)
             put(c, 'shipment', shipment)
             return shipment_view(shipment)
 
@@ -1256,7 +1332,7 @@ def register(app, s):
             updated = []
             for oid in shipment['order_ids']:
                 order = get(c, oid, 'project')
-                if LEGACY_STATUS.get(order['status'], order['status']) != 'in_transit':
+                if LEGACY_STATUS.get(order['status'], order['status']) not in ('supplier_ordered', 'in_transit'):
                     continue  # goods already arrived keep the date they arrived under
                 if order.get('eta') != body.eta:
                     event(order, 'eta_updated', actor, previous=order.get('eta'), eta=body.eta, batch_id=sid, batch_name=shipment.get('name'))
@@ -1273,7 +1349,7 @@ def register(app, s):
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
             shipment = get(c, sid, 'shipment')
-            if shipment.get('status') == 'arrived':
+            if shipment.get('status') in ('arrived', 'arrived_warehouse'):
                 return {**shipment_view(shipment), 'invoice_ids': shipment.get('invoice_ids', [])}
             ready = []
             for oid in shipment['order_ids']:
@@ -1301,7 +1377,9 @@ def register(app, s):
                 iid = key('balance:', f'batch-arrival:{sid}:{cid}')
                 evidence = 'Created automatically when shipment ' + str(shipment.get('name')) + ' arrived'
                 drafts.append(create_balance_invoice(c, orders, actor, iid, evidence, hashlib.sha256(iid.encode()).hexdigest())['id'])
-            shipment.update(status='arrived', arrived_at=s.now(), invoice_ids=drafts)
+            shipment.setdefault('history', [])
+            shipment.update(status='arrived_warehouse', arrived_at=s.now(), warehouse_arrived_at=s.business_now().date().isoformat(), invoice_ids=drafts)
+            event(shipment, 'shipment_progress', actor, status='arrived_warehouse')
             put(c, 'shipment', shipment)
         for nid in notifications:
             deliver(nid)
@@ -2112,6 +2190,68 @@ def register(app, s):
             event(d, 'order_number_edited', actor, previous=previous, order_number=d['order_number'])
             put(c, 'project', d, d['customer_id'])
             return enrich(c, d)
+
+    @app.post('/api/operations/orders/progress')
+    def update_order_progress(body: OrderProgressUpdate, actor=Depends(s.require_admin)):
+        """Staff adjustment for the order and payment summaries, keeping linked payment records in sync."""
+        updated = []
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            order_ids = list(dict.fromkeys(body.order_ids))
+            orders = {oid: get(c, oid, 'project') for oid in order_ids}
+            if body.payment_status == 'deposit_unpaid':
+                for oid in order_ids:
+                    deposit_invoice = next((i for i in records(c, 'invoice', orders[oid]['customer_id']) if i.get('kind') == 'deposit' and oid in i.get('order_ids', [])), None)
+                    if deposit_invoice and deposit_invoice.get('payment_status') == 'received':
+                        raise HTTPException(409, 'A recorded deposit receipt cannot be changed back to unpaid from this bulk editor')
+                    if orders[oid].get('payment_status') == 'paid':
+                        raise HTTPException(409, 'A settled order cannot be changed back to deposit unpaid')
+            if body.payment_status == 'deposit_received':
+                for oid in order_ids:
+                    if orders[oid].get('payment_status') == 'paid':
+                        raise HTTPException(409, 'A settled order cannot be changed back to deposit received')
+                    if orders[oid].get('status') == 'pending_review':
+                        raise HTTPException(409, 'Accept technical review before confirming a deposit')
+                    deposit_invoice = get(c, 'deposit:' + oid, 'invoice')
+                    received_at = deposit_invoice.get('received_at') or s.now()
+                    deposit_invoice.update(payment_status='received', received_at=received_at, received_by=actor)
+                    orders[oid]['deposit_paid_at'] = received_at
+                    start_lead_time(orders[oid], received_at)
+                    put(c, 'invoice', deposit_invoice, orders[oid]['customer_id'])
+            if body.payment_status == 'paid':
+                if any(orders[oid].get('payment_status') not in ('deposit_received', 'paid') for oid in order_ids):
+                    raise HTTPException(409, 'Confirm the deposit before marking an order paid')
+                selected = set(order_ids)
+                balance_invoices = [i for i in records(c, 'invoice') if i.get('kind') == 'balance' and set(i.get('order_ids', [])) & selected]
+                covered = set()
+                for invoice in balance_invoices:
+                    linked = set(invoice.get('order_ids', []))
+                    if not linked <= selected:
+                        raise HTTPException(409, 'Select every order linked to each shared balance invoice before marking paid')
+                    covered.update(linked)
+                if not balance_invoices or not selected <= covered:
+                    raise HTTPException(409, 'A balance invoice is required before an order can be marked paid')
+                for invoice in balance_invoices:
+                    invoice.update(payment_status='received', received_at=invoice.get('received_at') or s.now(), received_by=actor,
+                                   receipt_note='Payment progress updated from Order overview')
+                    put(c, 'invoice', invoice, invoice['customer_id'])
+                for invoice in balance_invoices:
+                    for oid in invoice.get('order_ids', []):
+                        orders[oid]['payment_status'] = 'paid'
+            for oid, order in orders.items():
+                previous = {}
+                if body.status is not None and order.get('status') != body.status:
+                    previous['status'] = order.get('status')
+                    order['status'] = body.status
+                if body.payment_status is not None and order.get('payment_status') != body.payment_status:
+                    previous['payment_status'] = order.get('payment_status')
+                    order['payment_status'] = body.payment_status
+                if previous:
+                    event(order, 'staff_progress_updated', actor, previous=previous,
+                          status=order.get('status'), payment_status=order.get('payment_status'))
+                    put(c, 'project', order, order['customer_id'])
+                updated.append({'order_id': oid, 'status': 'updated' if previous else 'unchanged'})
+        return {'results': updated}
 
     @app.post('/api/operations/orders/{oid}/review')
     def review(oid: str, body: OrderReview | None = None, actor=Depends(s.require_admin)):

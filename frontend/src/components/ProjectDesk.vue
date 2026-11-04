@@ -39,7 +39,7 @@ interface Invoice {
   received_at?: string;
 }
 interface ShipmentOrder { id: string; order_number?: string; company?: string; project_name: string; status: string; eta?: string; factory_price_usd?: string | null; measured_sqm?: string | null; purchase_cost?: string | null; freight_cost?: string | null; duty_cost?: string | null; duty_basis?: string | null; }
-interface Shipment { id: string; name: string; eta?: string | null; status: string; created_at?: string; arrived_at?: string; order_ids: string[]; orders?: ShipmentOrder[]; freight_land?: string; freight_sea?: string; duty_total?: string | null; invoice_ids?: string[]; }
+interface Shipment { id: string; name: string; eta?: string | null; status: string; created_at?: string; arrived_at?: string; factory_departed_at?: string | null; on_board_at?: string | null; port_arrived_at?: string | null; warehouse_arrived_at?: string | null; order_ids: string[]; orders?: ShipmentOrder[]; freight_land?: string; freight_sea?: string; duty_total?: string | null; invoice_ids?: string[]; }
 interface ShipmentCandidate { id: string; order_number?: string; company: string; project_name: string; eta?: string; deposit_paid_at?: string; }
 interface MailPreview {
   invoice_id: string;
@@ -206,6 +206,7 @@ const projectPane = ref<'orders'|'shipments'|'overview'>('overview');
 const shipmentPick = ref<string[]>([]);
 const shipmentForm = reactive({ name: '', eta: '' });
 const shipmentEta = reactive<Record<string, string>>({});
+const shipmentMilestones = reactive<Record<string, { factory_departed_at: string; on_board_at: string; port_arrived_at: string; warehouse_arrived_at: string }>>({});
 const shipmentCosts = reactive<Record<string, { freight_land: string; freight_sea: string; duty_total: string }>>({});
 const purchaseForm = reactive<Record<string, { usd: string; sqm: string }>>({});
 const notices = ref<Notice[]>([]);
@@ -222,7 +223,10 @@ const loaded = ref(false);
 const error = ref("");
 const notice = ref("");
 const fulfilError = ref("");
-const statusFilter = ref("");
+const orderProgressFilter = ref("");
+const paymentProgressFilter = ref("");
+const bulkOrderStatus = ref("");
+const bulkPaymentStatus = ref("");
 const picked = ref<string[]>([]);
 const invoicePick = ref<string[]>([]);
 const mailPreview = ref<MailPreview | null>(null);
@@ -261,8 +265,24 @@ function readySupplierExport(orderId:string) {
 const activeSection = computed(() => (({pricing:'pricing',providers:'providers',finance:'settlement'} as Record<string,string>)[props.workspace] || 'operations'));
 const validFields = ["order_number", "order_id", "project_name", "company", "contact_name", "company_address", "site_address", "phone", "email", "window_name", "product_id", "width_mm", "height_mm", "quantity", "panel_count", "options", "arrived", "delivered"];
 
-const visibleOrders = computed(() => orders.value.filter((order) => !statusFilter.value || order.status === statusFilter.value || order.payment_status === statusFilter.value));
-const orderStatusChoices = computed(() => [...new Set(orders.value.flatMap((order) => [order.status, order.payment_status]).filter(Boolean))]);
+const visibleOrders = computed(() => orders.value.filter((order) =>
+  (!orderProgressFilter.value || order.status === orderProgressFilter.value) &&
+  (!paymentProgressFilter.value || order.payment_status === paymentProgressFilter.value)));
+const orderStatusChoices = computed(() => [...new Set(orders.value.map((order) => order.status).filter(Boolean))]);
+const paymentStatusChoices = computed(() => [...new Set(orders.value.map((order) => order.payment_status).filter(Boolean))]);
+const editableOrderStatuses = ['draft', 'pending_review', 'accepted', 'supplier_ordered', 'in_transit', 'ready', 'complete'];
+const editablePaymentStatuses = ['deposit_unpaid', 'deposit_received', 'paid'];
+const selectedBalanceInvoices = computed(() => {
+  const selected = new Set(picked.value);
+  return invoices.value.filter((invoice) => invoice.kind === "balance" && invoiceSent(invoice) && invoice.payment_status !== "received" &&
+    !!invoice.order_ids?.length && invoice.order_ids.every((id) => selected.has(id)));
+});
+function orderProgressCount(status: string) {
+  return orders.value.filter((order) => (!status || order.status === status) && (!paymentProgressFilter.value || order.payment_status === paymentProgressFilter.value)).length;
+}
+function paymentProgressCount(status: string) {
+  return orders.value.filter((order) => (!status || order.payment_status === status) && (!orderProgressFilter.value || order.status === orderProgressFilter.value)).length;
+}
 const listPage = ref(0);
 const pageCount = computed(() => Math.max(1, Math.ceil(visibleOrders.value.length / 6)));
 const pageOrders = computed(() => visibleOrders.value.slice(Math.min(listPage.value, pageCount.value - 1) * 6, (Math.min(listPage.value, pageCount.value - 1) + 1) * 6));
@@ -363,6 +383,10 @@ async function load() {
   for (const shipment of shipmentList) {
     shipmentEta[shipment.id] = shipment.eta || '';
     shipmentCosts[shipment.id] ||= { freight_land: shipment.freight_land || '', freight_sea: shipment.freight_sea || '', duty_total: shipment.duty_total || '' };
+    shipmentMilestones[shipment.id] = {
+      factory_departed_at: shipment.factory_departed_at || '', on_board_at: shipment.on_board_at || '',
+      port_arrived_at: shipment.port_arrived_at || '', warehouse_arrived_at: shipment.warehouse_arrived_at || '',
+    };
     for (const order of shipment.orders || []) purchaseForm[order.id] = { usd: order.factory_price_usd || '', sqm: '' };
   }
   if(props.workspace==='finance' && financeCustomer.value && !picked.value.length) {
@@ -458,7 +482,8 @@ async function openInvoicePdf() {
 
 function orderStatus(value: string) {
   const labels: Record<string, [string, string]> = {
-    pending_review: ["待审核", "Review pending"], accepted: ["已接收", "Accepted"],
+    draft: ['草稿', 'Draft'],
+    pending_review: ["待审核", "Review pending"], accepted: ["已确认", "Confirmed"],
     deposit_unpaid: ["待收定金", "Deposit unpaid"], deposit_received: ["定金已收", "Deposit received"],
     supplier_ordered: ["已下单", "Ordered"], in_transit: ["运输中", "In transit"],
     partially_arrived: ["部分到货", "Partly arrived"], arrived: ["可提货", "Ready for collection"], ready: ["可提货", "Ready for collection"],
@@ -565,6 +590,42 @@ async function applyBulkStatus(kind: 'accept' | 'deposit' | 'supplier') {
       if (kind === 'supplier' && order.status === 'accepted' && order.payment_status === 'deposit_received') await request(`operations/orders/${order.id}/supplier-order`, {});
     }
     picked.value = [];
+  });
+}
+
+function applyBulkProgress() {
+  const orderIds = [...picked.value];
+  if (!orderIds.length || (!bulkOrderStatus.value && !bulkPaymentStatus.value)) return;
+  return act(async () => {
+    const result = await request<{ results: { order_id: string; status: string; reason?: string }[] }>('operations/orders/progress', {
+      order_ids: orderIds,
+      ...(bulkOrderStatus.value ? { status: bulkOrderStatus.value } : {}),
+      ...(bulkPaymentStatus.value ? { payment_status: bulkPaymentStatus.value } : {}),
+    });
+    const changed = result.results.filter(row => row.status === 'updated').length;
+    notice.value = tx(`已更新 ${changed} 个订单的进度；对应的收款账单状态已同步。`, `Updated progress for ${changed} order(s) and synchronized the linked payment records.`);
+    picked.value = [];
+    bulkOrderStatus.value = '';
+    bulkPaymentStatus.value = '';
+  });
+}
+
+async function receiveSelectedBalances() {
+  const targets = selectedBalanceInvoices.value;
+  if (!targets.length) return;
+  await act(async () => {
+    const received: string[] = [];
+    const failed: string[] = [];
+    for (const invoice of targets) {
+      try {
+        await request(`operations/invoices/${invoice.id}/received`, { note: tx("批量确认尾款已收", "Bulk balance receipt confirmed") });
+        received.push(invoice.invoice_number || invoice.id);
+      } catch (cause) {
+        failed.push(`${invoice.invoice_number || invoice.id}: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+    }
+    notice.value = received.length ? tx(`已确认 ${received.length} 张尾款账单收款。`, `Confirmed receipt for ${received.length} balance invoice(s).`) : "";
+    if (failed.length) error.value = failed.join("; ");
   });
 }
 
@@ -715,7 +776,41 @@ function createShipment() {
     const ids = [...shipmentPick.value].sort();
     await request('operations/shipments', { name: shipmentForm.name.trim(), order_ids: ids, eta: shipmentForm.eta || undefined, operation_key: stableKey(JSON.stringify({ shipment: shipmentForm.name.trim().toLowerCase(), ids })) });
     shipmentForm.name = ''; shipmentForm.eta = ''; shipmentPick.value = [];
-    notice.value = tx('已创建批次并将订单标为在途。', 'Shipment created; orders are now in transit.');
+    notice.value = tx('批次已创建，订单会在批次出厂时自动转为运输中。', 'Shipment created; orders move in transit when the batch leaves the factory.');
+  });
+}
+function shipmentNextStage(shipment: Shipment): string {
+  return ({ planned: 'factory_departed', factory_departed: 'on_board', on_board: 'port_arrived', port_arrived: 'arrived_warehouse' } as Record<string, string>)[shipment.status] || '';
+}
+function shipmentStageLabel(status: string) {
+  const labels: Record<string, [string, string]> = {
+    planned: ['待出厂', 'Preparing'], factory_departed: ['已出厂', 'Factory departed'],
+    on_board: ['已上船', 'On board'], port_arrived: ['已到港', 'Arrived at port'],
+    arrived_warehouse: ['已到仓库', 'At warehouse'],
+  };
+  return labels[status] ? tx(...labels[status]) : orderStatus(status);
+}
+function advanceShipment(shipment: Shipment) {
+  const status = shipmentNextStage(shipment);
+  if (!status) return;
+  if (status === 'arrived_warehouse') return arriveShipment(shipment);
+  return act(async () => {
+    await request(`operations/shipments/${encodeURIComponent(shipment.id)}/progress`, { status });
+    notice.value = status === 'factory_departed'
+      ? tx('批次已出厂，批次内订单已转为运输中。', 'Batch departed the factory; its orders are now in transit.')
+      : tx(`批次进度已更新：${shipmentStageLabel(status)}。`, `Shipment advanced to ${shipmentStageLabel(status)}.`);
+  });
+}
+function saveShipmentMilestones(shipment: Shipment) {
+  const values = shipmentMilestones[shipment.id];
+  return act(async () => {
+    await request(`operations/shipments/${encodeURIComponent(shipment.id)}/milestones`, {
+      factory_departed_at: values.factory_departed_at || null,
+      on_board_at: values.on_board_at || null,
+      port_arrived_at: values.port_arrived_at || null,
+      warehouse_arrived_at: values.warehouse_arrived_at || null,
+    });
+    notice.value = tx('已保存批次里程碑日期。', 'Shipment milestone dates saved.');
   });
 }
 function updateShipmentEta(shipment: Shipment) {
@@ -734,7 +829,7 @@ function saveShipmentCosts(shipment: Shipment) {
   return act(async () => { await request(`operations/shipments/${encodeURIComponent(shipment.id)}/costs`, { freight_land: cost.freight_land || '0', freight_sea: cost.freight_sea || '0', duty_total: cost.duty_total || null }); notice.value = tx('已保存批次运费和关税。', 'Shipment costs saved.'); });
 }
 function arriveShipment(shipment: Shipment) {
-  return act(async () => { const result = await request<Shipment & {invoice_ids?: string[]}>(`operations/shipments/${encodeURIComponent(shipment.id)}/arrive`, {}); notice.value = tx(`批次已到货；自动生成 ${result.invoice_ids?.length || 0} 张尾款草稿。`, `Shipment arrived; ${result.invoice_ids?.length || 0} balance draft(s) created automatically.`); });
+  return act(async () => { const result = await request<Shipment & {invoice_ids?: string[]}>(`operations/shipments/${encodeURIComponent(shipment.id)}/arrive`, {}); notice.value = tx(`批次已到仓库；自动生成 ${result.invoice_ids?.length || 0} 张尾款草稿。`, `Shipment reached the warehouse; ${result.invoice_ids?.length || 0} balance draft(s) created automatically.`); });
 }
 
 async function previewInvoiceMail() {
@@ -1139,10 +1234,16 @@ async function loadOrderProviders(orderId: string) {
     <div v-show="loaded && (workspace !== 'projects' || projectPane === 'orders')" class="workspace-grid">
       <aside v-if="workspace === 'projects'" class="card order-list">
         <div class="list-heading"><h3>{{ tx("订单列表", "Orders") }}</h3><span>{{ visibleOrders.length }}</span></div>
-        <label class="filter-row">{{ tx("筛选", "Filter") }}
-          <select v-model="statusFilter" @change="listPage = 0">
+        <label class="filter-row">{{ tx("订单进度", "Order progress") }}
+          <select v-model="orderProgressFilter" @change="listPage = 0">
             <option value="">{{ tx("全部", "All") }}</option>
-            <option v-for="status in [...new Set(orders.flatMap((order) => [order.status, order.payment_status]))]" :key="status" :value="status">{{ orderStatus(status) }}</option>
+            <option v-for="status in orderStatusChoices" :key="status" :value="status">{{ orderStatus(status) }}</option>
+          </select>
+        </label>
+        <label class="filter-row">{{ tx("付款进度", "Payment progress") }}
+          <select v-model="paymentProgressFilter" @change="listPage = 0">
+            <option value="">{{ tx("全部", "All") }}</option>
+            <option v-for="status in paymentStatusChoices" :key="status" :value="status">{{ orderStatus(status) }}</option>
           </select>
         </label>
         <div class="mobile-project-picker">
@@ -1586,7 +1687,7 @@ async function loadOrderProviders(orderId: string) {
       </div>
     </div>
     <section v-if="workspace === 'projects' && projectPane === 'shipments'" class="card shipment-workspace">
-      <header><div><h2>{{ tx('批次管理','Shipment batches') }}</h2><p>{{ tx('将已向供应商下单且尚未分批的卷帘订单加入海运批次。创建后会自动标为在途。','Create a sea shipment from supplier-ordered shutter orders that are not already batched. Orders move to in transit on creation.') }}</p></div></header>
+      <header><div><h2>{{ tx('运输批次','Shipment batches') }}</h2><p>{{ tx('创建并管理运输批次；订单在批次出厂时自动转为运输中，到仓库后自动进入可提取阶段。','Create and manage shipments. Orders move in transit when a batch leaves the factory, then become ready when it reaches the warehouse.') }}</p></div></header>
       <div class="shipment-create">
         <label>{{ tx('批次名称','Batch name') }}<input v-model="shipmentForm.name" :placeholder="tx('例如 P4261008','e.g. P4261008')" /></label>
         <label>{{ tx('预计到货','ETA') }}<input v-model="shipmentForm.eta" type="date" /></label>
@@ -1598,7 +1699,7 @@ async function loadOrderProviders(orderId: string) {
       <h3>{{ tx('现有批次','Current batches') }} · {{ shipments.length }}</h3>
       <p v-if="!shipments.length" class="hint">{{ tx('尚未建立批次。','No shipment batches yet.') }}</p>
       <article v-for="shipment in shipments" :key="shipment.id" class="shipment-card">
-        <header><div><h3>{{ shipment.name }}</h3><span class="badge">{{ orderStatus(shipment.status) }}</span></div><small>{{ shipment.orders?.length || shipment.order_ids.length }} {{ tx('个订单','orders') }}</small></header>
+        <header><div><h3>{{ shipment.name }}</h3><span class="badge">{{ shipmentStageLabel(shipment.status) }}</span></div><small>{{ shipment.orders?.length || shipment.order_ids.length }} {{ tx('个订单','orders') }}</small></header>
         <ul class="shipment-orders"><li v-for="order in shipment.orders" :key="order.id">
           <div class="shipment-order-main"><strong>{{ order.order_number || order.id }}</strong> · {{ order.company }} · {{ order.project_name }} · {{ orderStatus(order.status) }}</div>
           <div v-if="purchaseForm[order.id]" class="shipment-fields">
@@ -1608,29 +1709,65 @@ async function loadOrderProviders(orderId: string) {
           </div>
           <small v-if="order.freight_cost != null" class="shipment-share">{{ tx('已摊分','Allocated') }}: {{ tx('运费','freight') }} NZD {{ order.freight_cost }} · {{ tx('关税','duty') }} NZD {{ order.duty_cost }} ({{ order.duty_basis === 'actual' ? tx('实际','actual') : tx('估算','estimate') }})</small>
         </li></ul>
-        <div class="shipment-fields"><label>{{ tx('预计到货','ETA') }}<input v-model="shipmentEta[shipment.id]" type="date" /></label><button type="button" :disabled="busy || shipment.status==='arrived'" @click="updateShipmentEta(shipment)">{{ tx('更新 ETA','Update ETA') }}</button></div>
+        <div class="shipment-milestones">
+          <label>{{ tx('出厂时间','Factory departure') }}<input v-model="shipmentMilestones[shipment.id].factory_departed_at" type="date" /></label>
+          <label>{{ tx('上船时间','Loaded on vessel') }}<input v-model="shipmentMilestones[shipment.id].on_board_at" type="date" /></label>
+          <label>{{ tx('到港时间','Port arrival') }}<input v-model="shipmentMilestones[shipment.id].port_arrived_at" type="date" /></label>
+          <label>{{ tx('到仓库时间','Warehouse arrival') }}<input v-model="shipmentMilestones[shipment.id].warehouse_arrived_at" type="date" /></label>
+          <button type="button" class="secondary" :disabled="busy" @click="saveShipmentMilestones(shipment)">{{ tx('保存日期','Save dates') }}</button>
+        </div>
+        <div class="shipment-progress-action" v-if="shipmentNextStage(shipment)">
+          <span>{{ tx('下一阶段','Next stage') }}：{{ shipmentStageLabel(shipmentNextStage(shipment)) }}</span>
+          <button type="button" :disabled="busy" @click="advanceShipment(shipment)">{{ shipmentNextStage(shipment)==='factory_departed' ? tx('确认出厂','Mark factory departure') : shipmentNextStage(shipment)==='on_board' ? tx('确认上船','Mark loaded on vessel') : shipmentNextStage(shipment)==='port_arrived' ? tx('确认到港','Mark port arrival') : tx('确认到仓库并生成尾款草稿','Mark warehouse arrival & draft balances') }}</button>
+        </div>
+        <div class="shipment-fields"><label>{{ tx('预计到货','ETA') }}<input v-model="shipmentEta[shipment.id]" type="date" /></label><button type="button" :disabled="busy || shipment.status==='arrived_warehouse'" @click="updateShipmentEta(shipment)">{{ tx('更新 ETA','Update ETA') }}</button></div>
         <div class="shipment-fields"><label>{{ tx('陆运运费','Land freight') }}<input v-model="shipmentCosts[shipment.id].freight_land" inputmode="decimal" /></label><label>{{ tx('海运运费','Sea freight') }}<input v-model="shipmentCosts[shipment.id].freight_sea" inputmode="decimal" /></label><label>{{ tx('实际关税（可选）','Actual duty (optional)') }}<input v-model="shipmentCosts[shipment.id].duty_total" inputmode="decimal" /></label><button type="button" :disabled="busy" @click="saveShipmentCosts(shipment)">{{ tx('保存成本','Save costs') }}</button></div>
-        <button v-if="shipment.status!=='arrived'" type="button" :disabled="busy" @click="arriveShipment(shipment)">{{ tx('记录整批到货并开尾款草稿','Mark batch arrived and draft balance invoices') }}</button>
-        <p v-else class="success">{{ tx('批次已到货','Shipment arrived') }} · {{ shipment.invoice_ids?.length || 0 }} {{ tx('张尾款草稿','balance drafts') }}</p>
+        <p v-if="shipment.status==='arrived_warehouse'" class="success">{{ tx('批次已到仓库','Shipment arrived at warehouse') }} · {{ shipment.invoice_ids?.length || 0 }} {{ tx('张尾款草稿','balance drafts') }}</p>
       </article>
     </section>
     <section v-if="workspace === 'projects' && projectPane === 'overview'" class="card order-overview">
       <header><div><h2>{{ tx('订单总览','Order overview') }}</h2><p>{{ tx('仅显示订单级别的付款和履约摘要，不展开窗户行。','Order-level payment and fulfilment summary; window rows are omitted.') }}</p></div></header>
-      <nav class="overview-statuses" :aria-label="tx('按订单状态筛选','Filter orders by status')">
-        <button type="button" :aria-pressed="!statusFilter" @click="statusFilter='';listPage=0">{{ tx('全部','All') }} <span>{{ orders.length }}</span></button>
-        <button v-for="status in orderStatusChoices" :key="status" type="button" :aria-pressed="statusFilter===status" @click="statusFilter=status;listPage=0">{{ orderStatus(status) }} <span>{{ orders.filter(o=>o.status===status||o.payment_status===status).length }}</span></button>
-      </nav>
+      <div class="overview-filter-groups">
+        <section class="overview-filter-group">
+          <strong>{{ tx('订单进度','Order progress') }}</strong>
+          <nav class="overview-statuses" :aria-label="tx('按订单进度筛选','Filter by order progress')">
+            <button type="button" :aria-pressed="!orderProgressFilter" @click="orderProgressFilter='';listPage=0">{{ tx('全部','All') }} <span>{{ orderProgressCount('') }}</span></button>
+            <button v-for="status in orderStatusChoices" :key="status" type="button" :aria-pressed="orderProgressFilter===status" @click="orderProgressFilter=status;listPage=0">{{ orderStatus(status) }} <span>{{ orderProgressCount(status) }}</span></button>
+          </nav>
+        </section>
+        <section class="overview-filter-group">
+          <strong>{{ tx('付款进度','Payment progress') }}</strong>
+          <nav class="overview-statuses" :aria-label="tx('按付款进度筛选','Filter by payment progress')">
+            <button type="button" :aria-pressed="!paymentProgressFilter" @click="paymentProgressFilter='';listPage=0">{{ tx('全部','All') }} <span>{{ paymentProgressCount('') }}</span></button>
+            <button v-for="status in paymentStatusChoices" :key="status" type="button" :aria-pressed="paymentProgressFilter===status" @click="paymentProgressFilter=status;listPage=0">{{ orderStatus(status) }} <span>{{ paymentProgressCount(status) }}</span></button>
+          </nav>
+        </section>
+      </div>
       <div class="overview-bulk">
         <label><input type="checkbox" :checked="allVisibleOrdersPicked" @change="toggleAllVisibleOrders(($event.target as HTMLInputElement).checked)" /> {{ tx('全选当前列表','Select all shown') }} ({{ visibleOrders.length }})</label>
         <span>{{ tx('已选','Selected') }} {{ picked.length }}</span>
-        <button type="button" class="secondary" :disabled="busy || !picked.some(id=>orders.find(o=>o.id===id)?.status==='pending_review')" @click="applyBulkStatus('accept')">{{ tx('批量接收报价','Accept selected quotes') }}</button>
-        <button type="button" class="secondary" :disabled="busy || !picked.some(id=>{const o=orders.find(x=>x.id===id);return o?.status!=='pending_review'&&o?.payment_status==='deposit_unpaid'})" @click="applyBulkStatus('deposit')">{{ tx('批量确认定金','Confirm selected deposits') }}</button>
-        <button type="button" class="secondary" :disabled="busy || !picked.some(id=>{const o=orders.find(x=>x.id===id);return o?.status==='accepted'&&o?.payment_status==='deposit_received'})" @click="applyBulkStatus('supplier')">{{ tx('批量标为已下单','Mark selected as ordered') }}</button>
-        <button type="button" class="secondary" :disabled="busy || !picked.some(id=>orders.find(o=>o.id===id)?.status==='supplier_ordered')" @click="transitSelected">{{ tx('批量标为在途','Mark selected in transit') }}</button>
-        <button type="button" class="secondary" :disabled="busy || !picked.some(id=>['in_transit','partially_arrived'].includes(orders.find(o=>o.id===id)?.status || ''))" @click="arriveSelected">{{ tx('批量记录到货','Record selected arrivals') }}</button>
+        <div class="overview-progress-edit">
+          <label>{{ tx('订单状态','Order status') }}
+            <select v-model="bulkOrderStatus" :disabled="!picked.length"><option value="">{{ tx('保持不变','Keep unchanged') }}</option><option v-for="status in editableOrderStatuses" :key="status" :value="status">{{ orderStatus(status) }}</option></select>
+          </label>
+          <label>{{ tx('支付进度','Payment progress') }}
+            <select v-model="bulkPaymentStatus" :disabled="!picked.length"><option value="">{{ tx('保持不变','Keep unchanged') }}</option><option v-for="status in editablePaymentStatuses" :key="status" :value="status">{{ orderStatus(status) }}</option></select>
+          </label>
+          <button type="button" :disabled="busy || !picked.length || (!bulkOrderStatus && !bulkPaymentStatus)" @click="applyBulkProgress">{{ tx('应用到所选订单','Apply to selected orders') }}</button>
+        </div>
+        <div class="overview-bulk-group"><strong>{{ tx('订单进度','Order progress') }}</strong>
+          <button type="button" class="secondary" :disabled="busy || !picked.some(id=>orders.find(o=>o.id===id)?.status==='pending_review')" @click="applyBulkStatus('accept')">{{ tx('确认所选报价','Accept selected quotes') }}</button>
+          <button type="button" class="secondary" :disabled="busy || !picked.some(id=>{const o=orders.find(x=>x.id===id);return o?.status==='accepted'&&o?.payment_status==='deposit_received'})" @click="applyBulkStatus('supplier')">{{ tx('标为已向工厂下单','Mark ordered with supplier') }}</button>
+          <button type="button" class="secondary" :disabled="busy || !picked.some(id=>orders.find(o=>o.id===id)?.status==='supplier_ordered')" @click="transitSelected">{{ tx('标为运输中','Mark in transit') }}</button>
+          <button type="button" class="secondary" :disabled="busy || !picked.some(id=>['in_transit','partially_arrived'].includes(orders.find(o=>o.id===id)?.status || ''))" @click="arriveSelected">{{ tx('确认到货','Confirm arrivals') }}</button>
+        </div>
+        <div class="overview-bulk-group"><strong>{{ tx('付款进度','Payment progress') }}</strong>
+          <button type="button" class="secondary" :disabled="busy || !picked.some(id=>{const o=orders.find(x=>x.id===id);return o?.status!=='pending_review'&&o?.payment_status==='deposit_unpaid'})" @click="applyBulkStatus('deposit')">{{ tx('确认定金已收','Confirm deposits received') }}</button>
+          <button type="button" class="secondary" :disabled="busy || !selectedBalanceInvoices.length" @click="receiveSelectedBalances">{{ tx('确认尾款已收','Confirm balances received') }}<span v-if="selectedBalanceInvoices.length">({{ selectedBalanceInvoices.length }})</span></button>
+        </div>
       </div>
-      <div class="overview-scroll"><table><thead><tr><th></th><th>{{ tx('订单 / 项目','Order / project') }}</th><th>{{ tx('提交日期','Submitted') }}</th><th>{{ tx('状态','Status') }}</th><th>{{ tx('定金','Deposit') }}</th><th>{{ tx('定金日期','Deposit date') }}</th><th>{{ tx('尾款','Balance') }}</th><th>{{ tx('尾款日期','Balance date') }}</th><th>{{ tx('完成日期','Completed') }}</th><th>ETA</th><th>{{ tx('批次','Batch') }}</th></tr></thead><tbody>
-        <tr v-for="order in visibleOrders" :key="order.id" class="overview-row" @click="openOrder(order.id)"><td @click.stop><input type="checkbox" :aria-label="tx('选择订单','Select order')+' '+order.order_number" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" /></td><td><button type="button" class="overview-order-link" @click.stop="openOrder(order.id)"><strong>{{ order.order_number || order.id }}</strong><small>{{ order.company }} · {{ order.project_name }}</small></button></td><td>{{ quoteDate(order.created_at) }}</td><td>{{ orderStatus(order.status) }} · {{ orderStatus(order.payment_status) }}</td><td>{{ quoteMoney(order.deposit, order.currency || 'NZD') }}</td><td>{{ quoteDate(order.deposit_paid_at || depositInvoiceFor(order)?.received_at) }}</td><td>{{ quoteBalance(order) }}</td><td>{{ quoteDate(balanceInvoiceFor(order)?.received_at || balanceInvoiceFor(order)?.created_at) }}</td><td>{{ quoteDate(order.completed_at || [...(order.history || [])].reverse().find(h => h.action === 'delivery')?.created_at) }}</td><td>{{ quoteDate(order.eta) }}</td><td>{{ order.batch_name || '—' }}</td></tr>
+      <div class="overview-scroll"><table><thead><tr><th></th><th>{{ tx('订单 / 项目','Order / project') }}</th><th>{{ tx('提交日期','Submitted') }}</th><th>{{ tx('订单进度','Order progress') }}</th><th>{{ tx('付款进度','Payment progress') }}</th><th>{{ tx('定金','Deposit') }}</th><th>{{ tx('定金日期','Deposit date') }}</th><th>{{ tx('尾款','Balance') }}</th><th>{{ tx('尾款日期','Balance date') }}</th><th>{{ tx('完成日期','Completed') }}</th><th>ETA</th><th>{{ tx('批次','Batch') }}</th></tr></thead><tbody>
+        <tr v-for="order in visibleOrders" :key="order.id" class="overview-row" @click="openOrder(order.id)"><td @click.stop><input type="checkbox" :aria-label="tx('选择订单','Select order')+' '+order.order_number" :checked="picked.includes(order.id)" @change="toggleOrder(order.id)" /></td><td><button type="button" class="overview-order-link" @click.stop="openOrder(order.id)"><strong>{{ order.order_number || order.id }}</strong><small>{{ order.company }} · {{ order.project_name }}</small></button></td><td>{{ quoteDate(order.created_at) }}</td><td>{{ orderStatus(order.status) }}</td><td>{{ orderStatus(order.payment_status) }}</td><td>{{ quoteMoney(order.deposit, order.currency || 'NZD') }}</td><td>{{ quoteDate(order.deposit_paid_at || depositInvoiceFor(order)?.received_at) }}</td><td>{{ quoteBalance(order) }}</td><td>{{ quoteDate(balanceInvoiceFor(order)?.received_at || balanceInvoiceFor(order)?.created_at) }}</td><td>{{ quoteDate(order.completed_at || [...(order.history || [])].reverse().find(h => h.action === 'delivery')?.created_at) }}</td><td>{{ quoteDate(order.eta) }}</td><td>{{ order.batch_name || '—' }}</td></tr>
       </tbody></table></div>
     </section>
     <Teleport to="body">
@@ -2192,8 +2329,11 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .shipment-workspace > header,.order-overview > header { margin-bottom:16px; }
 .shipment-workspace > header h2,.order-overview > header h2 { margin:0; }
 .shipment-workspace > header p,.order-overview > header p { margin:5px 0; color:#52635a; }
-.shipment-create,.shipment-fields { display:flex; flex-wrap:wrap; align-items:end; gap:10px; margin:12px 0; }
+.shipment-create,.shipment-fields,.shipment-milestones { display:flex; flex-wrap:wrap; align-items:end; gap:10px; margin:12px 0; }
 .shipment-create label,.shipment-fields label { display:grid; gap:4px; min-width:150px; }
+.shipment-milestones { padding:12px; background:#f8faf8; border:1px solid #e1e8e2; border-radius:8px; }
+.shipment-milestones label { display:grid; gap:4px; min-width:155px; flex:1; }
+.shipment-progress-action { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:12px 0; padding:12px; background:#eef5ef; border-radius:8px; }
 .shipment-candidates { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:8px; margin-bottom:20px; }
 .shipment-candidates label { display:flex; gap:9px; align-items:flex-start; padding:10px; border:1px solid #dce5df; border-radius:8px; }
 .shipment-candidates small,.order-overview td small { display:block; color:#52635a; }
@@ -2208,8 +2348,8 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .order-overview table { border-collapse:collapse; width:100%; min-width:1050px; }
 .order-overview th,.order-overview td { text-align:left; padding:10px 9px; border-bottom:1px solid #e4eae5; white-space:nowrap; }
 .order-overview th { background:#f5f8f5; }
-.overview-statuses,.overview-bulk{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 12px}.overview-statuses button{display:inline-flex;align-items:center;gap:8px;background:#f5f8f5;color:#244537;border:1px solid #dce5df}.overview-statuses button[aria-pressed="true"]{background:#17523a;color:#fff}.overview-statuses span{font-size:12px;opacity:.8}.overview-bulk{padding:10px;background:#f8faf8;border:1px solid #e1e8e2;border-radius:6px}.overview-bulk label{display:flex;align-items:center;gap:7px;margin-right:auto}.overview-row{cursor:pointer}.overview-row:hover{background:#f7faf7}.overview-order-link{display:grid;text-align:left;background:transparent!important;color:#17462f!important;border:0!important;padding:0!important;min-height:0!important}.overview-order-link small{display:block;color:#52635a}.overview-row input[type=checkbox],.overview-bulk input[type=checkbox]{width:18px;height:18px;cursor:pointer}
-@media(max-width:700px) { .shipment-create,.shipment-fields { display:grid; grid-template-columns:minmax(0,1fr); } .shipment-create label,.shipment-fields label { min-width:0; } .shipment-candidates { grid-template-columns:minmax(0,1fr); } .shipment-card { padding:12px; } }
+.overview-filter-groups{display:grid;gap:10px;margin-bottom:12px}.overview-filter-group{display:grid;gap:6px}.overview-filter-group>strong,.overview-bulk-group>strong{font-size:13px;color:#52635a}.overview-statuses{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.overview-statuses button{display:inline-flex;align-items:center;gap:8px;background:#f5f8f5;color:#244537;border:1px solid #dce5df}.overview-statuses button[aria-pressed="true"]{background:#17523a;color:#fff}.overview-statuses span{font-size:12px;opacity:.8}.overview-bulk{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;margin:0 0 12px;padding:10px;background:#f8faf8;border:1px solid #e1e8e2;border-radius:6px}.overview-bulk label{display:flex;align-items:center;gap:7px;margin-right:auto}.overview-bulk-group{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding-left:12px;border-left:1px solid #dce5df}.overview-bulk-group>strong{white-space:nowrap}.overview-progress-edit{display:flex;align-items:end;gap:8px;flex-wrap:wrap;width:100%;padding:10px 0;border-top:1px solid #dce5df}.overview-progress-edit label{display:grid;gap:4px;margin:0;min-width:180px}.overview-progress-edit select{min-width:180px;padding:8px;border:1px solid #cbd8ce;border-radius:5px;background:white}.overview-row{cursor:pointer}.overview-row:hover{background:#f7faf7}.overview-order-link{display:grid;text-align:left;background:transparent!important;color:#17462f!important;border:0!important;padding:0!important;min-height:0!important}.overview-order-link small{display:block;color:#52635a}.overview-row input[type=checkbox],.overview-bulk input[type=checkbox]{width:18px;height:18px;cursor:pointer}
+@media(max-width:700px) { .shipment-create,.shipment-fields,.shipment-milestones { display:grid; grid-template-columns:minmax(0,1fr); } .shipment-create label,.shipment-fields label,.shipment-milestones label { min-width:0; } .shipment-candidates { grid-template-columns:minmax(0,1fr); } .shipment-card { padding:12px; } }
 @media (max-width: 1100px) { .fin-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 700px) {
   .fin-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
