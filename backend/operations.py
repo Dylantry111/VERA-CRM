@@ -684,7 +684,13 @@ def iso_date(value):
 
 class ShipmentCreate(Batch):
     name: str | None = Field(default=None, min_length=1, max_length=100)
+    factory_departed_at: str | None = None
     eta: str | None = None
+
+    @field_validator('factory_departed_at')
+    @classmethod
+    def valid_factory_departed_at(cls, v):
+        return None if v is None else iso_date(v)
 
     @field_validator('eta')
     @classmethod
@@ -1258,6 +1264,8 @@ def register(app, s):
             name = (body.name or '').strip() or sid
             if any(x.get('name', x['id']).casefold() == name.casefold() for x in records(c, 'shipment')):
                 raise HTTPException(409, 'A shipment with this name already exists')
+            factory_date = body.factory_departed_at or s.business_now().date().isoformat()
+            eta = body.eta or (date.fromisoformat(factory_date) + timedelta(days=28)).isoformat()
             members, results = [], []
             for oid in dict.fromkeys(body.order_ids):
                 try:
@@ -1269,8 +1277,10 @@ def register(app, s):
                     if order.get('shipment_id'):
                         raise HTTPException(409, 'Order already belongs to a shipment')
                     order.update(shipment_id=sid, batch_name=name)
-                    if body.eta:
-                        order.update(eta=body.eta, eta_source='batch')
+                    order.update(eta=eta, eta_source='batch')
+                    if order['status'] == 'supplier_ordered':
+                        order['status'] = 'in_transit'
+                        event(order, 'in_transit', actor, batch_id=sid, batch_name=name, eta=eta)
                     set_cost_area(c, order)
                     put(c, 'project', order, order['customer_id'])
                     members.append(oid)
@@ -1279,8 +1289,10 @@ def register(app, s):
                     results.append({'order_id': oid, 'status': 'skipped', 'reason': error.detail})
             if not members:
                 raise HTTPException(409, 'No eligible shutter orders could join this shipment')
-            shipment = {'id': sid, 'name': name, 'eta': body.eta, 'status': 'planned', 'order_ids': members, 'results': results, 'history': [],
+            shipment = {'id': sid, 'name': name, 'eta': eta, 'status': 'factory_departed', 'factory_departed_at': factory_date,
+                        'order_ids': members, 'results': results, 'history': [],
                         'request_hash': bodyhash(body), 'created_at': s.now(), 'actor': actor}
+            event(shipment, 'shipment_progress', actor, status='factory_departed', factory_departed_at=factory_date)
             put(c, 'shipment', shipment)
             return shipment_view(shipment)
 
