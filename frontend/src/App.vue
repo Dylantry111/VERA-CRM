@@ -28,8 +28,7 @@ function toggleLocale() {
   <div class="frame" :class="{ 'frame-work': workbench, 'frame-portal': portalWorkspace }">
     <header v-if="!workbench" class="rail" :class="{'rail-home':home,'rail-solid':scrolled||menuOpen}" >
       <router-link to="/" class="mark">
-        <span class="oval">{{ t("brand") }}</span>
-        <small>{{ t("tagline") }}</small>
+        <img class="brand-logo" src="/images/vera-logo.png" alt="VERA Shading Solutions" />
       </router-link>
       <button type="button" class="secondary menu" :aria-expanded="menuOpen" aria-controls="site-navigation" @click="menuOpen = !menuOpen">
         {{ t("nav.menu") }}
@@ -55,19 +54,13 @@ function toggleLocale() {
 .rail{min-height:76px}
 .rail:not(.rail-home){background:#faf9f6}
 @media(max-width:700px){.rail{min-height:72px;padding-top:12px;padding-bottom:12px}}
-.rail-home{position:fixed;left:0;right:0;top:0;z-index:50;background:transparent;border-bottom-color:rgba(255,255,255,.2);color:white;transition:background .2s,color .2s}
-.rail:not(.rail-home) .oval{background:transparent;color:var(--ink);border-radius:0}
-.rail-home .oval{background:white;color:var(--frame)}.rail-home button.secondary{color:white;border-color:rgba(255,255,255,.5)}
-.rail-home:hover,.rail-home:has(:focus-visible),.rail-home.rail-solid{background:rgba(250,249,246,.98);color:var(--ink);border-bottom-color:var(--line)}
-.rail-home:hover .oval,.rail-home:has(:focus-visible) .oval,.rail-home.rail-solid .oval{background:var(--frame);color:white}
-.rail-home:hover button.secondary,.rail-home:has(:focus-visible) button.secondary,.rail-home.rail-solid button.secondary{color:var(--ink);border-color:var(--ink)}
-@media(prefers-reduced-motion:reduce){.rail-home{transition:none}}
-.rail,.rail-home,.rail-home:hover,.rail-home:has(:focus-visible),.rail-home.rail-solid{border-bottom:0}.nav a.router-link-active:not(.button){box-shadow:none}.nav-quote{background:transparent;border:0;color:inherit}
-.rail-home .oval{background:transparent;color:white;border-radius:0}.rail-home:hover .oval,.rail-home:has(:focus-visible) .oval,.rail-home.rail-solid .oval{background:transparent;color:var(--ink)}
-.rail-home:not(.rail-solid) .nav a,.rail-home:not(.rail-solid) .mark{text-shadow:0 1px 3px rgba(0,0,0,.6)}.rail-home:hover .nav a,.rail-home:has(:focus-visible) .nav a,.rail-home:hover .mark,.rail-home:has(:focus-visible) .mark{text-shadow:none}
+.rail-home{position:fixed;left:0;right:0;top:0;z-index:50;background:rgba(250,249,246,.97);color:var(--ink);border-bottom:1px solid var(--line)}
+.brand-logo{display:block;width:170px;height:auto;max-height:58px;object-fit:contain}
+.nav a.router-link-active:not(.button){box-shadow:none}.nav-quote{background:transparent;border:0;color:inherit}
+@media(max-width:700px){.brand-logo{width:148px;max-height:50px}}
 
 .frame-portal .rail{min-height:64px;padding:8px 24px;border-bottom:1px solid var(--line)}
-.frame-portal .rail .oval{font-size:24px}.frame-portal .rail .mark small{font-size:11px}
+.frame-portal .brand-logo{width:150px;max-height:52px}
 @media(max-width:700px){.frame-portal .rail{min-height:60px;padding:6px 12px}}
 
 .frame-portal{padding:0;display:flex;flex-direction:column;min-height:100dvh}.frame-portal .rail{flex:none}

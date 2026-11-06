@@ -177,6 +177,7 @@ onMounted(() => {
 
     <template v-else>
       <nav class="top-nav" :aria-label="tx('主导航','Main navigation')">
+        <router-link to="/" class="crm-brand" :aria-label="tx('VERA 首页','VERA home')"><img src="/images/vera-logo.png" alt="VERA Shading Solutions" /></router-link>
         <button v-for="item in nav" v-show="item.key !== 'users' || me.role === 'admin'" :key="item.key" type="button" :class="{ current: tab === item.key }" @click="openTab(item.key)">
           <BarChart3 v-if="item.key==='dashboard'" :size="18" aria-hidden="true" />
           <FolderKanban v-else-if="item.key==='projects'" :size="18" aria-hidden="true" />
@@ -378,6 +379,8 @@ th, .crm strong, .crm b { font-weight: var(--fw-emphasis); }
 @media(max-width:800px){.desk-rail .rail-mobile-toggle{display:flex;grid-column:1/-1}.desk-rail:not(.mobile-open)>button:not(.rail-mobile-toggle){display:none}.desk-rail{margin-bottom:10px!important}}
 .crm.is-signed,.crm.is-signed.rail-collapsed { padding: 18px clamp(14px, 2vw, 32px) 36px; }
 .top-nav { display:flex; align-items:center; gap:4px; min-height:60px; padding:8px 10px; margin:-18px calc(-1 * clamp(14px, 2vw, 32px)) 18px; background:#19392d; color:#e7eee9; overflow-x:auto; }
+.top-nav .crm-brand { display:flex; flex:0 0 auto; align-items:center; justify-content:center; width:132px; min-height:44px; margin-right:8px; padding:4px 7px; border-radius:5px; background:#f8f8f4; }
+.top-nav .crm-brand img { display:block; width:100%; max-height:40px; object-fit:contain; }
 .top-nav>button { flex:0 0 auto; display:flex; align-items:center; justify-content:center; gap:8px; min-height:44px; padding:8px 11px; border:0; border-radius:7px; background:transparent; color:inherit; font-size:13px; white-space:nowrap; }
 .top-nav>button:hover { background:#ffffff18; }
 .top-nav>button.current { background:#315844; color:white; }
@@ -385,5 +388,5 @@ th, .crm strong, .crm b { font-weight: var(--fw-emphasis); }
 .top-nav .account-menu { margin-left:auto; position:sticky; right:0; background:#19392d; }
 .top-nav .account-menu summary>span { background:#e4eee7; }
 .crm-bar { min-height:38px; padding-bottom:8px; margin-bottom:16px; }
-@media(max-width:800px) { .crm.is-signed,.crm.is-signed.rail-collapsed { padding:12px; } .top-nav { margin:-12px -12px 14px; gap:2px; } .top-nav .nav-brand { margin-right:0; } .top-nav>button { padding:8px; } .top-nav>button span { font-size:12px; } }
+@media(max-width:800px) { .crm.is-signed,.crm.is-signed.rail-collapsed { padding:12px; } .top-nav { margin:-12px -12px 14px; gap:2px; } .top-nav .crm-brand { width:110px; margin-right:4px; } .top-nav>button { padding:8px; } .top-nav>button span { font-size:12px; } }
 </style>

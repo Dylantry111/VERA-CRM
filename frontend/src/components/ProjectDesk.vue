@@ -1855,7 +1855,7 @@ async function loadOrderProviders(orderId: string) {
               <div><dt>Mobile</dt><dd>{{ selectedOrder.phone || "—" }}</dd></div>
               <div><dt>Address</dt><dd>{{ selectedOrder.company_address || "—" }}</dd></div>
             </dl>
-            <div class="quote-mark" aria-hidden="true"><strong>VERA</strong><span>SHADING SOLUTIONS</span></div>
+            <div class="quote-mark" aria-hidden="true"><img src="/images/vera-logo.png" alt="" /></div>
             <div class="quote-title-block">
               <button type="button" class="mail-x" :aria-label="tx('关闭预览','Close preview')" @click="closeSheetPreview">✕</button>
               <p>QUOTE</p>
@@ -2246,9 +2246,8 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .quote-party div{display:grid;grid-template-columns:72px minmax(0,1fr);gap:8px}
 .quote-party dt{color:#6b6258;font-size:11px}
 .quote-party dd{margin:0;font-weight:600;overflow-wrap:anywhere}
-.quote-mark{display:flex;flex-direction:column;align-items:center;justify-content:center;width:148px;height:64px;border:2px solid #1b2421;border-radius:40px;background:#fff}
-.quote-mark strong{font-size:22px;letter-spacing:.18em;line-height:1}
-.quote-mark span{font-size:8px;letter-spacing:.16em}
+.quote-mark{display:flex;align-items:center;justify-content:center;width:180px;height:64px;border:0;border-radius:0;background:transparent}
+.quote-mark img{display:block;width:100%;max-height:100%;object-fit:contain}
 .quote-title-block{justify-self:end;text-align:right}
 .quote-title-block p{margin:8px 0 0;font-size:28px;letter-spacing:.14em;line-height:1}
 .quote-title-block small{color:#6b6258}
