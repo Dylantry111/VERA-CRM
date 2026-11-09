@@ -572,6 +572,42 @@ class Login(Input):
     password: str
 
 
+class PortalPasswordUpdate(Input):
+    new_password: str = Field(min_length=8, max_length=200)
+    current_password: str | None = Field(default=None, max_length=200)
+
+
+class TradeProductInterest(Input):
+    product_id: int = Field(gt=0)
+    monthly_sqm: Decimal = Field(gt=0, le=100000, allow_inf_nan=False)
+
+
+class TradeApplication(Input):
+    company_name: str = Field(min_length=2, max_length=200)
+    nzbn: str = Field(pattern=r'^\d{13}$')
+    primary_contact_name: str = Field(min_length=2, max_length=200)
+    primary_email: str = Field(min_length=3, max_length=200)
+    primary_phone: str = Field(min_length=5, max_length=100)
+    finance_email: str = Field(min_length=3, max_length=200)
+    finance_phone: str = Field(min_length=5, max_length=100)
+    company_address: str = Field(min_length=5, max_length=1000)
+    product_interests: list[TradeProductInterest] = Field(min_length=1, max_length=20)
+    notes: str = Field(default='', max_length=2000)
+
+    @field_validator('primary_email', 'finance_email')
+    @classmethod
+    def valid_application_emails(cls, value):
+        from email_service import address
+        return address(value)
+
+    @model_validator(mode='after')
+    def unique_product_interests(self):
+        ids = [item.product_id for item in self.product_interests]
+        if len(ids) != len(set(ids)):
+            raise ValueError('Choose each product series only once')
+        return self
+
+
 class Window(Input):
     window_name: str = Field(min_length=1, max_length=200)
     product_id: int = Field(gt=0)
@@ -634,6 +670,10 @@ class ProfileEdit(Input):
     company_address: str = Field(min_length=1,max_length=1000)
     customer_type: Literal['retail', 'wholesale'] | None = None
     customer_code: str | None = Field(default=None, max_length=50)
+    nzbn: str | None = Field(default=None, max_length=13)
+    finance_email: str | None = Field(default=None, max_length=200)
+    finance_phone: str | None = Field(default=None, max_length=100)
+    product_interests: list[dict] | None = Field(default=None, max_length=20)
 
     @field_validator('email')
     @classmethod
@@ -642,7 +682,7 @@ class ProfileEdit(Input):
         return address(v) if v else ''
 
 class PortalLogin(Input):
-    username: str = Field(min_length=3, max_length=100, pattern=r'^[A-Za-z0-9_.@-]+$')
+    username: str = Field(min_length=3, max_length=200, pattern=r'^[A-Za-z0-9_.+@-]+$')
     password: str = Field(min_length=8, max_length=200)
 
 
@@ -1545,6 +1585,87 @@ def register(app, s):
             return {key: order.get(key) for key in ('id','factory_price_usd','usd_nzd_rate','purchase_cost','measured_sqm',
                     'freight_cost','duty_cost','duty_estimate','duty_basis','total_cost','gross_profit','cost_per_sqm')}
 
+    @app.post('/api/trade-applications')
+    def submit_trade_application(body: TradeApplication):
+        from email_service import address
+        primary_email = address(body.primary_email).strip()
+        finance_email = address(body.finance_email).strip()
+        with s.db() as c:
+            for existing in records(c, 'trade_application'):
+                if existing.get('status') == 'pending' and existing.get('primary_email', '').casefold() == primary_email.casefold():
+                    raise HTTPException(409, 'An application from this email is already waiting for review')
+            products = {json.loads(row['data'])['id']: json.loads(row['data']) for row in c.execute('SELECT data FROM products')}
+            selected = []
+            for interest in body.product_interests:
+                product = products.get(interest.product_id)
+                if not product or not product.get('published', True) or product.get('source_code') not in WEBSITE_IMAGES:
+                    raise HTTPException(422, 'Choose a currently available VERA trade product')
+                selected.append({'product_id': product['id'], 'name': product.get('name_en', ''),
+                                 'material': product.get('material_en', ''), 'monthly_sqm': str(interest.monthly_sqm)})
+            d = body.model_dump(mode='json', exclude={'product_interests'})
+            d.update(id='trade-application:'+secrets.token_hex(12), primary_email=primary_email,
+                     finance_email=finance_email, product_interests=selected, status='pending',
+                     submitted_at=s.now())
+            put(c, 'trade_application', d)
+            return {'reference': d['id'].split(':', 1)[1], 'status': d['status']}
+
+    @app.get('/api/operations/trade-applications')
+    def trade_applications(actor=Depends(s.require_admin)):
+        with s.db() as c:
+            return sorted(records(c, 'trade_application'), key=lambda item: item.get('submitted_at', ''), reverse=True)
+
+    @app.get('/api/operations/trade-applications/count')
+    def trade_application_count(actor=Depends(s.require_admin)):
+        with s.db() as c:
+            return {'pending': sum(item.get('status') == 'pending' for item in records(c, 'trade_application'))}
+
+    @app.post('/api/operations/trade-applications/{aid}/approve')
+    def approve_trade_application(aid: str, actor=Depends(s.require_admin)):
+        from email_service import configuration, send_email
+        state = configuration()[0]
+        if not state.get('configured') or state.get('mode') != 'live':
+            raise HTTPException(503, 'Live email delivery must be enabled before approving a trade application')
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            d = get(c, 'trade-application:'+aid, 'trade_application')
+            if d.get('status') != 'pending':
+                raise HTTPException(409, 'This trade application has already been processed')
+            username = d['primary_email'].strip().lower()
+            if any(row['username'].casefold() == username.casefold() for row in c.execute('SELECT username FROM portal_profiles')):
+                raise HTTPException(409, 'A portal account already uses this email address')
+            if any(row['company'].strip().casefold() == d['company_name'].strip().casefold() for row in c.execute('SELECT company FROM customers')):
+                raise HTTPException(409, 'A customer account already exists for this company')
+            temporary_password = secrets.token_urlsafe(15)
+            customer_id = c.execute('INSERT INTO customers(company) VALUES(?)', (d['company_name'],)).lastrowid
+            customer_code = f'TR{int(customer_id):06d}'
+            profile_data = {
+                'customer_id': customer_id, 'company': d['company_name'], 'contact_name': d['primary_contact_name'],
+                'email': d['primary_email'], 'phone': d['primary_phone'], 'company_address': d['company_address'],
+                'username': username, 'customer_type': 'wholesale', 'customer_code': customer_code,
+                'nzbn': d['nzbn'], 'finance_email': d['finance_email'], 'finance_phone': d['finance_phone'],
+                'product_interests': d['product_interests'], 'application_notes': d.get('notes', ''),
+                'trade_application_id': d['id'], 'portal_login': 'active', 'force_password_change': True,
+                'created_at': s.now(), 'created_by': actor,
+            }
+            c.execute('INSERT INTO portal_profiles VALUES(?,?,?,?)',
+                      (customer_id, username, s.password_hash(temporary_password), s.dump(profile_data)))
+            sign_in_url = os.getenv('VERA_PUBLIC_URL', 'https://verashading.com').rstrip('/') + '/portal'
+            message = (
+                f"Your VERA Trade account is now open for {d['company_name']}.\n\n"
+                f"Sign in: {sign_in_url}\nUsername: {username}\nTemporary password: {temporary_password}\n\n"
+                "For your security, you will be asked to choose a new password at first sign-in.\n"
+                "Your trade profile contains the company and contact information from your application."
+            )
+            try:
+                send_email(d['primary_email'], 'Your VERA Trade account is ready', message)
+            except Exception:
+                raise HTTPException(502, 'Account approval was not saved because the account email could not be sent; try again') from None
+            d.update(status='approved', approved_at=s.now(), approved_by=actor,
+                     customer_id=customer_id, customer_code=customer_code)
+            put(c, 'trade_application', d)
+            return {'application_id': d['id'], 'customer_id': customer_id, 'username': username,
+                    'status': 'approved', 'email_sent': True}
+
     @app.post('/api/portal/login')
     def login(body: Login):
         with s.db() as c:
@@ -1565,6 +1686,24 @@ def register(app, s):
     def me(cid=Depends(customer_auth)):
         with s.db() as c:
             return profile(c, cid)
+
+    @app.post('/api/portal/password')
+    def update_portal_password(body: PortalPasswordUpdate, cid=Depends(customer_auth), credentials=Depends(s.security)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row = c.execute('SELECT * FROM portal_profiles WHERE customer_id=?', (cid,)).fetchone()
+            if not row:
+                raise HTTPException(404, 'Portal account not found')
+            d = json.loads(row['data'])
+            if not d.get('force_password_change'):
+                if not body.current_password or not s.password_ok(body.current_password, row['password_hash']):
+                    raise HTTPException(401, 'Current password is incorrect')
+            d.update(force_password_change=False, password_changed_at=s.now())
+            current_token = hashlib.sha256(credentials.credentials.encode()).hexdigest() if credentials else ''
+            c.execute('UPDATE portal_profiles SET password_hash=?,data=? WHERE customer_id=?',
+                      (s.password_hash(body.new_password), s.dump(d), cid))
+            c.execute('DELETE FROM portal_sessions WHERE customer_id=? AND token_hash<>?', (cid, current_token))
+            return {'ok': True, 'force_password_change': False}
 
     @app.get('/api/operations/customers')
     def customers(actor=Depends(s.auth)):
@@ -2253,6 +2392,34 @@ def register(app, s):
             d.update(id='price:'+str(pid), product_id=pid, actor=actor, updated_at=s.now())
             put(c, 'price', d)
             return d
+
+    @app.get('/api/public/trade-pricing')
+    def public_trade_pricing():
+        with s.db() as c:
+            pointer = c.execute('SELECT data FROM operations_records WHERE id=?', ('template-current',)).fetchone()
+            if not pointer:
+                return {'configured': False, 'currency': 'NZD', 'products': []}
+            template_id = json.loads(pointer['data'])['template_id']
+            template = prepare_knowledge_manifest(get(c, template_id, 'template'))
+            products_by_code = {json.loads(row['data']).get('source_code'): json.loads(row['data'])
+                                for row in c.execute('SELECT data FROM products')}
+            rules_by_code = {rule.get('source_code'): rule for rule in template.get('products', [])}
+            products = []
+            for code in WEBSITE_IMAGES:
+                product = products_by_code.get(code)
+                if not product or not product.get('published', True):
+                    continue
+                rule = rules_by_code.get(code) or {}
+                price_available = rule.get('status') == 'configured' and not rule.get('provisional')
+                products.append({'product_id': product['id'], 'name': product.get('name_en'),
+                                 'material': product.get('material_en'), 'rate_per_sqm': str(rule.get('rate_per_m2')) if price_available else None,
+                                 'price_available': price_available, 'minimum_sqm_per_item': str(rule.get('minimum_area', '0.5')),
+                                 'options': rule.get('options', {}) if price_available else {}})
+            return {'configured': True, 'currency': 'NZD', 'version': template.get('version'),
+                    'gst_rate': str(template.get('tax_rate', '0.15')),
+                    'deposit_rate': str(template.get('deposit_rate', '0.60')),
+                    'minimum_sqm_per_order': str(template.get('order_minimum_area', '1')),
+                    'addons': template.get('addons', []), 'products': products}
 
     @app.get('/api/portal/catalog')
     def catalog(cid=Depends(customer_auth)):

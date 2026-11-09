@@ -14,6 +14,7 @@ import Company from "./views/portal/Company.vue";
 import Help from "./views/portal/Help.vue";
 import MyRebate from "./views/portal/MyRebate.vue";
 import TradeResourcesView from "./views/TradeResourcesView.vue";
+import TradeAccountView from "./views/TradeAccountView.vue";
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -22,6 +23,7 @@ export const router = createRouter({
     { path: "/products", name: "products", component: ProductsView },
     { path: "/products/:id", name: "product", component: ProductDetailView },
     { path: "/trade-resources", name: "trade-resources", component: TradeResourcesView },
+    { path: "/trade-account", name: "trade-account", component: TradeAccountView },
     { path: "/inquiry", redirect: "/contact" },
     { path: "/portal-old", redirect: "/portal" },
     {
@@ -35,7 +37,8 @@ export const router = createRouter({
         { path: "orders/:id", name: "order-detail", component: OrderDetail },
         { path: "invoices", name: "invoices", component: Invoices },
         { path: "rebates", name: "rebates", component: MyRebate },
-        { path: "company", name: "company", component: Company },
+        { path: "profile", name: "profile", component: Company },
+        { path: "company", redirect: "/portal/profile" },
         { path: "help", name: "help", component: Help },
       ],
     },

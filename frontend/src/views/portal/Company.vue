@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { portalRequest } from "../../portal-api";
 
@@ -8,6 +8,7 @@ const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
 
 const profile = ref<any>(null);
 const loading = ref(true);
+const productInterests = computed(() => (profile.value?.product_interests || []).map((item: any) => `${item.name} · ${item.monthly_sqm} m²/month`).join("; "));
 
 onMounted(async () => {
   try {
@@ -22,7 +23,7 @@ onMounted(async () => {
 
 <template>
   <div class="company-page">
-    <h1>{{ tx("公司资料", "Company Profile") }}</h1>
+    <h1>{{ tx("个人资料", "My Profile") }}</h1>
     
     <div v-if="loading" class="loading">{{ tx("加载中...", "Loading...") }}</div>
     
@@ -38,6 +39,20 @@ onMounted(async () => {
           <dd>{{ profile.phone }}</dd>
           <dt>{{ tx("公司地址", "Company Address") }}</dt>
           <dd>{{ profile.company_address }}</dd>
+          <dt>NZBN</dt>
+          <dd>{{ profile.nzbn || "—" }}</dd>
+          <dt>{{ tx("财务邮箱", "Finance Email") }}</dt>
+          <dd>{{ profile.finance_email || "—" }}</dd>
+          <dt>{{ tx("财务电话", "Finance Phone") }}</dt>
+          <dd>{{ profile.finance_phone || "—" }}</dd>
+          <template v-if="profile.product_interests?.length">
+            <dt>{{ tx("意向产品", "Interested Products") }}</dt>
+            <dd>{{ productInterests }}</dd>
+          </template>
+          <template v-if="profile.application_notes">
+            <dt>{{ tx("补充信息", "Additional Information") }}</dt>
+            <dd>{{ profile.application_notes }}</dd>
+          </template>
         </dl>
       </div>
       

@@ -17,14 +17,22 @@ interface PortalCustomer {
   customer_type?: CustomerType | null;
   created_at?: string;
   portal_login?: "active" | "disabled";
+  nzbn?: string;
+  finance_email?: string;
+  finance_phone?: string;
+  product_interests?: { product_id: number; name: string; material?: string; monthly_sqm: string }[];
 }
 
 const { locale } = useI18n();
-defineProps<{ admin?: boolean }>();
+const props = defineProps<{ admin?: boolean; emailEnabled?: boolean; emailMode?: string }>();
+const emit = defineEmits<{ (event: "applications-updated"): void }>();
 const tx = (zh: string, en: string) => (locale.value === "zh" ? zh : en);
 const PAGE_SIZE = 8;
 
 const rows = ref<PortalCustomer[]>([]);
+const applications = ref<any[]>([]);
+const approving = ref("");
+const pendingApplications = computed(() => applications.value.filter((item) => item.status === "pending"));
 const loading = ref(true);
 const error = ref("");
 const notice = ref("");
@@ -112,6 +120,21 @@ const draft = reactive({ company: "", contact_name: "", email: "", phone: "", co
 
 async function load() {
   rows.value = await request<PortalCustomer[]>("operations/customers");
+  if (props.admin) applications.value = await request<any[]>("operations/trade-applications");
+}
+
+async function approveApplication(application: any) {
+  error.value = "";
+  notice.value = "";
+  approving.value = application.id;
+  try {
+    await request(`operations/trade-applications/${encodeURIComponent(application.id.split(":").pop())}/approve`, {});
+    notice.value = tx("申请已批准，客户账号已创建并已发送临时密码。", "Application approved. The customer account was created and sign-in details were emailed.");
+    await load();
+    emit("applications-updated");
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause);
+  } finally { approving.value = ""; }
 }
 
 onMounted(async () => {
@@ -181,6 +204,17 @@ async function save() {
 
 <template>
   <section class="card profiles">
+    <section v-if="props.admin" class="application-inbox" aria-labelledby="applications-title">
+      <header class="inbox-head"><div><h3 id="applications-title">Trade account applications</h3><p>{{ pendingApplications.length }} awaiting review</p></div><span v-if="pendingApplications.length" class="application-count">{{ pendingApplications.length }}</span></header>
+      <p v-if="pendingApplications.length && (!props.emailEnabled || props.emailMode !== 'live')" class="email-prerequisite">Live email delivery must be enabled in Settings before an application can be approved and account credentials emailed.</p>
+      <p v-if="!pendingApplications.length" class="hint">No new trade applications.</p>
+      <article v-for="application in pendingApplications" :key="application.id" class="application-card">
+        <div class="application-top"><div><h4>{{ application.company_name }}</h4><p class="meta">NZBN {{ application.nzbn }} · Submitted {{ application.submitted_at?.slice(0, 10) }}</p></div><button type="button" :disabled="approving === application.id || !props.emailEnabled || props.emailMode !== 'live'" @click="approveApplication(application)">{{ approving === application.id ? "Approving…" : "Approve & create account" }}</button></div>
+        <div class="application-facts"><span><strong>Main contact</strong>{{ application.primary_contact_name }} · {{ application.primary_email }} · {{ application.primary_phone }}</span><span><strong>Finance contact</strong>{{ application.finance_email }} · {{ application.finance_phone }}</span><span><strong>Company address</strong>{{ application.company_address }}</span></div>
+        <div class="application-products"><strong>Estimated monthly product area</strong><span v-for="product in application.product_interests" :key="product.product_id">{{ product.name }} · {{ product.monthly_sqm }} m²/month</span></div>
+        <p v-if="application.notes" class="application-notes">{{ application.notes }}</p>
+      </article>
+    </section>
     <header class="profiles-head">
       <div>
         <h2>{{ tx("客户资料", "Customers") }}</h2>
@@ -266,12 +300,17 @@ async function save() {
 
           <section v-if="detailTab === 'profile' && !editing" class="panel">
             <dl class="facts">
+              <div class="wide"><dt>{{ tx("公司全名", "Legal company name") }}</dt><dd>{{ current.company || "—" }}</dd></div>
+              <div v-if="current.nzbn"><dt>NZBN</dt><dd>{{ current.nzbn }}</dd></div>
               <div><dt>{{ tx("联系人", "Contact") }}</dt><dd>{{ current.contact_name || "—" }}</dd></div>
               <div><dt>{{ tx("电话", "Phone") }}</dt><dd>{{ current.phone || "—" }}</dd></div>
               <div><dt>{{ tx("邮箱", "Email") }}</dt><dd>{{ current.email || tx("待补", "Not provided") }}</dd></div>
+              <div v-if="current.finance_email"><dt>{{ tx("财务邮箱", "Finance email") }}</dt><dd>{{ current.finance_email }}</dd></div>
+              <div v-if="current.finance_phone"><dt>{{ tx("财务电话", "Finance phone") }}</dt><dd>{{ current.finance_phone }}</dd></div>
               <div><dt>{{ tx("客户类型", "Customer type") }}</dt><dd>{{ typeLabel(typeOf(current)) }}</dd></div>
               <div><dt>{{ tx("批发客户代码", "Wholesale code") }}</dt><dd :class="{ 'warn-text': missingCode(current) }">{{ current.customer_code || (typeOf(current) === "wholesale" ? tx("缺失", "Missing") : "—") }}</dd></div>
               <div class="wide"><dt>{{ tx("公司地址", "Company address") }}</dt><dd>{{ current.company_address || "—" }}</dd></div>
+              <div v-if="current.product_interests?.length" class="wide"><dt>{{ tx("意向产品与月采购量", "Product interest and monthly estimate") }}</dt><dd>{{ current.product_interests.map((item) => `${item.name}: ${item.monthly_sqm} m²`).join(" · ") }}</dd></div>
             </dl>
             <div class="actions"><button type="button" @click="startEdit">{{ tx("编辑资料", "Edit profile") }}</button></div>
           </section>
@@ -305,7 +344,7 @@ async function save() {
             <form v-if="admin" class="login-form" @submit.prevent="savePortalLogin">
               <h4>{{ loginActive(current) ? tx("重置门户登录", "Reset portal login") : tx("开通门户登录", "Open portal login") }}</h4>
               <div class="form-grid">
-                <label>{{ tx("登录账号", "Username") }}<input v-model="loginForm.username" required minlength="3" maxlength="100" pattern="[A-Za-z0-9_.@-]+" autocomplete="off" /></label>
+                <label>{{ tx("登录账号", "Username") }}<input v-model="loginForm.username" required minlength="3" maxlength="200" pattern="[A-Za-z0-9_.+@-]+" autocomplete="off" /></label>
                 <label>{{ tx("新密码（至少 8 位）", "New password (8+ characters)") }}<input v-model="loginForm.password" type="password" required minlength="8" autocomplete="new-password" /></label>
               </div>
               <p class="hint">{{ tx("保存后客户之前的登录会话会立即失效。密码不会再显示，请自己记下并告诉客户。", "Saving signs the customer out of earlier sessions. The password is not shown again; note it and share it with the customer.") }}</p>
@@ -457,4 +496,5 @@ legend { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
   .line-list li > :first-child { min-width: 0; overflow-wrap: anywhere; }
   .line-list li .muted { grid-column: 1 / -1; grid-row: 2; }
 }
+.application-inbox{display:grid;gap:10px;padding:16px;border:1px solid #d4dee1;border-radius:12px;background:#f4f7f7}.email-prerequisite{margin:0;padding:9px 11px;border-radius:5px;background:#fff5e8;color:#81521a;font-size:12px}.inbox-head{display:flex;align-items:center;justify-content:space-between}.inbox-head h3{margin:0;font-size:16px}.inbox-head p{margin:3px 0 0;color:#61727a;font-size:12px}.application-count{display:grid;place-items:center;min-width:24px;height:24px;padding:0 6px;border-radius:50px;background:#435a67;color:#fff;font-size:12px;font-weight:700}.application-card{display:grid;gap:12px;padding:14px;border:1px solid #d7e0e2;border-radius:8px;background:#fff}.application-top{display:flex;align-items:center;justify-content:space-between;gap:12px}.application-top h4{margin:0}.application-top button{min-height:36px;padding:7px 12px;background:#435a67;color:#fff;border:1px solid #435a67;border-radius:6px;font-weight:650}.application-top button:disabled{opacity:.55}.application-facts{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;color:#4d6069;font-size:12px}.application-facts span{display:grid;gap:3px}.application-facts strong,.application-products>strong{color:#31454f;font-size:10px;text-transform:uppercase;letter-spacing:.04em}.application-products{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;padding-top:9px;border-top:1px solid #e8edef;font-size:12px}.application-products>strong{width:100%}.application-products span{padding:5px 8px;border-radius:999px;background:#edf2f3;color:#3f5661}.application-notes{font-size:12px;color:#61727a}@media(max-width:700px){.application-top{align-items:flex-start;flex-direction:column}.application-facts{grid-template-columns:1fr}}
 </style>

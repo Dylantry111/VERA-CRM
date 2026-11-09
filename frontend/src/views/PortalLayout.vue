@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { portalRequest, portalSession } from "../portal-api";
@@ -14,13 +14,16 @@ const profile = ref<any>(null);
 const loading = ref(true);
 const loginError = ref("");
 const credentials = ref({ username: "", password: "" });
+const passwordForm = reactive({ password: "", confirm: "" });
+const passwordError = ref("");
+const passwordSaving = ref(false);
 
 const NAV_ITEMS = [
   { path: "/portal/order/new", label_zh: "下单", label_en: "New Order", icon: "➕" },
   { path: "/portal/orders", label_zh: "我的订单", label_en: "My Orders", icon: "📋" },
   { path: "/portal/invoices", label_zh: "发票与付款", label_en: "Invoices", icon: "💰" },
   { path: "/portal/rebates", label_zh: "返现", label_en: "My Rebate", icon: "％" },
-  { path: "/portal/company", label_zh: "公司资料", label_en: "Company", icon: "🏢" },
+  { path: "/portal/profile", label_zh: "个人资料", label_en: "My Profile", icon: "👤" },
   { path: "/portal/help", label_zh: "帮助", label_en: "Help", icon: "❓" },
 ];
 
@@ -62,6 +65,19 @@ async function logout() {
   profile.value = null;
   router.push("/portal");
 }
+
+async function setFirstPassword() {
+  passwordError.value = "";
+  if (passwordForm.password !== passwordForm.confirm) { passwordError.value = "The passwords do not match."; return; }
+  passwordSaving.value = true;
+  try {
+    await portalRequest("password", { new_password: passwordForm.password });
+    profile.value = await portalRequest<any>("me");
+    passwordForm.password = "";
+    passwordForm.confirm = "";
+  } catch (cause) { passwordError.value = cause instanceof Error ? cause.message : String(cause); }
+  finally { passwordSaving.value = false; }
+}
 </script>
 
 <template>
@@ -85,6 +101,15 @@ async function logout() {
         </form>
         <p v-if="loginError" class="alert" role="alert">{{ loginError }}</p>
       </div>
+    </div>
+
+    <div v-else-if="profile?.force_password_change" class="first-password-view">
+      <form class="first-password-card" @submit.prevent="setFirstPassword">
+        <h1>Choose a new password</h1><p>Your temporary password has been used. Set a new password to continue to your trade account.</p>
+        <label>New password<input v-model="passwordForm.password" type="password" minlength="8" maxlength="200" autocomplete="new-password" required /></label>
+        <label>Confirm new password<input v-model="passwordForm.confirm" type="password" minlength="8" maxlength="200" autocomplete="new-password" required /></label>
+        <p v-if="passwordError" class="alert" role="alert">{{ passwordError }}</p><button type="submit" :disabled="passwordSaving">{{ passwordSaving ? "Saving…" : "Save password" }}</button>
+      </form>
     </div>
 
     <div v-else-if="profile" class="portal-main">
@@ -125,6 +150,7 @@ async function logout() {
   min-height: 100vh;
   background: #faf9f6;
 }
+.first-password-view{min-height:100vh;display:grid;place-items:center;padding:24px;background:#faf9f6}.first-password-card{width:min(440px,100%);padding:30px;background:#fff;border:1px solid var(--line);border-radius:8px}.first-password-card h1{margin:0 0 10px;font-size:25px}.first-password-card p{color:#62716b;font-size:13px;line-height:1.6}.first-password-card label{display:grid;gap:6px;margin:14px 0;font-size:12px;font-weight:650}.first-password-card input{height:40px;padding:8px 10px;border:1px solid #ccd7cf;border-radius:4px;font:inherit}.first-password-card button{margin-top:8px;min-height:40px;padding:8px 14px;border:0;border-radius:5px;background:#28343a;color:#fff;font-weight:650;cursor:pointer}.first-password-card button:disabled{opacity:.55}
 
 .login-view {
   display: flex;

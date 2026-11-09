@@ -26,6 +26,7 @@ const credentials = reactive({ username: "", password: "" });
 const products = ref<ApiProduct[]>([]);
 const emailMode = ref('demo');
 const emailEnabled = ref(false);
+const pendingTradeApplications = ref(0);
 const me = ref({ username: "", name: "", role: "staff" });
 const passwordOpen = ref(false);
 const accountMenu = ref<HTMLDetailsElement>();
@@ -50,7 +51,7 @@ const nav = computed(() => [
   { key: "dashboard", label: tx("Dashboard", "Dashboard") },
   { key: "projects", label: tx("Orders", "Orders") },
   { key: "shipments", label: tx("Shipment", "Shipment") },
-  { key: "customers", label: tx("Customer", "Customer") },
+  { key: "customers", label: tx("Customer", "Customer"), badge: pendingTradeApplications.value },
   { key: "providers", label: tx("Supplier", "Supplier") },
   { key: "pricing", label: tx("Price Knowledge", "Price Knowledge") },
   { key: "finance", label: tx("Accounts and Rebates", "Accounts and Rebates") },
@@ -84,7 +85,16 @@ async function load() {
   me.value = who;
   emailMode.value = runtime.email_mode;
   emailEnabled.value = runtime.email_delivery_enabled;
-  if (who.role === "admin") users.value = await request("users");
+  if (who.role === "admin") {
+    users.value = await request("users");
+    await refreshTradeApplicationCount();
+  } else pendingTradeApplications.value = 0;
+}
+
+async function refreshTradeApplicationCount() {
+  if (me.value.role !== "admin") return;
+  try { pendingTradeApplications.value = (await request<{ pending: number }>("operations/trade-applications/count")).pending; }
+  catch { /* The customer inbox remains available if the count refresh is temporarily unavailable. */ }
 }
 
 
@@ -181,7 +191,7 @@ onMounted(() => {
           <Wallet v-else-if="item.key==='finance'" :size="18" aria-hidden="true" />
           <Package v-else-if="item.key==='products'" :size="18" aria-hidden="true" />
           <Settings v-else-if="item.key==='users'" :size="18" aria-hidden="true" />
-          <span>{{ item.label }}</span>
+          <span>{{ item.label }}</span><span v-if="item.key === 'customers' && item.badge" class="nav-badge">{{ item.badge }}</span>
         </button>
         <details ref="accountMenu" class="account-menu">
           <summary :aria-label="tx('账户菜单', 'Account menu')" :title="me.name"><span>{{ (me.name || 'V').slice(0, 1) }}</span></summary>
@@ -206,7 +216,7 @@ onMounted(() => {
       <PricingKnowledge v-if="tab === 'pricing'" :admin="me.role === 'admin'" />
       <ProjectDesk v-if="['projects','shipments','providers','finance'].includes(tab)" :key="tab" :workspace="tab" :email-enabled="emailEnabled" :email-mode="emailMode" :admin="me.role === 'admin'" />
       <CrmGuide v-if="tab==='help'" :demo="emailMode!=='live'" :delivery-enabled="emailEnabled" />
-      <PortalCustomers v-if="tab === 'customers'" :admin="me.role === 'admin'" />
+      <PortalCustomers v-if="tab === 'customers'" :admin="me.role === 'admin'" :email-enabled="emailEnabled" :email-mode="emailMode" @applications-updated="refreshTradeApplicationCount" />
       <SampleDashboard v-if="tab === 'dashboard'" />
       <ProductManager v-if="tab === 'products'" :admin="me.role === 'admin'" @updated="act(load)" />
       <div v-if="tab === 'users' && me.role === 'admin'" class="settings-layout">
@@ -382,4 +392,5 @@ th, .crm strong, .crm b { font-weight: var(--fw-emphasis); }
 .top-nav .account-menu summary>span { background:#e4eee7; }
 .crm-bar { min-height:38px; padding-bottom:8px; margin-bottom:16px; }
 @media(max-width:800px) { .crm.is-signed,.crm.is-signed.rail-collapsed { padding:12px; } .top-nav { margin:-12px -12px 14px; gap:2px; } .top-nav .crm-brand { width:110px; margin-right:4px; } .top-nav>button { padding:8px; } .top-nav>button span { font-size:12px; } }
+.nav-badge{display:inline-grid;place-items:center;min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:#a34639;color:#fff;font-size:10px;font-weight:750;line-height:1}
 </style>
