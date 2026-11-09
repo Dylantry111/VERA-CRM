@@ -19,6 +19,7 @@ const NAV_ITEMS = [
   { path: "/portal/order/new", label_zh: "下单", label_en: "New Order", icon: "➕" },
   { path: "/portal/orders", label_zh: "我的订单", label_en: "My Orders", icon: "📋" },
   { path: "/portal/invoices", label_zh: "发票与付款", label_en: "Invoices", icon: "💰" },
+  { path: "/portal/rebates", label_zh: "返现", label_en: "My Rebate", icon: "％" },
   { path: "/portal/company", label_zh: "公司资料", label_en: "Company", icon: "🏢" },
   { path: "/portal/help", label_zh: "帮助", label_en: "Help", icon: "❓" },
 ];

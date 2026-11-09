@@ -5,7 +5,6 @@ import ProductDetailView from "./views/ProductDetailView.vue";
 import AboutView from "./views/AboutView.vue";
 import ContactView from "./views/ContactView.vue";
 import CrmView from "./views/CrmView.vue";
-import PortalView from "./views/PortalView.vue";
 import PortalLayout from "./views/PortalLayout.vue";
 import OrderTable from "./views/portal/OrderTable.vue";
 import OrdersList from "./views/portal/OrdersList.vue";
@@ -13,6 +12,7 @@ import OrderDetail from "./views/portal/OrderDetail.vue";
 import Invoices from "./views/portal/Invoices.vue";
 import Company from "./views/portal/Company.vue";
 import Help from "./views/portal/Help.vue";
+import MyRebate from "./views/portal/MyRebate.vue";
 import TradeResourcesView from "./views/TradeResourcesView.vue";
 
 export const router = createRouter({
@@ -23,7 +23,7 @@ export const router = createRouter({
     { path: "/products/:id", name: "product", component: ProductDetailView },
     { path: "/trade-resources", name: "trade-resources", component: TradeResourcesView },
     { path: "/inquiry", redirect: "/contact" },
-    { path: "/portal-old", name: "portal-old", component: PortalView },
+    { path: "/portal-old", redirect: "/portal" },
     {
       path: "/portal",
       component: PortalLayout,
@@ -34,6 +34,7 @@ export const router = createRouter({
         { path: "orders", name: "orders", component: OrdersList },
         { path: "orders/:id", name: "order-detail", component: OrderDetail },
         { path: "invoices", name: "invoices", component: Invoices },
+        { path: "rebates", name: "rebates", component: MyRebate },
         { path: "company", name: "company", component: Company },
         { path: "help", name: "help", component: Help },
       ],

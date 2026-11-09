@@ -825,6 +825,12 @@ class Credit(Input):
     currency: str = Field(default='NZD', pattern=r'^[A-Z]{3}$')
 
 
+class RebateRuleEdit(Input):
+    effective_from: date
+    threshold: Decimal = Field(gt=0, allow_inf_nan=False)
+    rate: Decimal = Field(gt=0, le=1, allow_inf_nan=False)
+
+
 class Settlement(Batch):
     rules_evidence: str = Field(min_length=5, max_length=1000)
     billing_basis: Literal['all_arrived_remaining_total']
@@ -2348,6 +2354,8 @@ def register(app, s):
 
     @app.post('/api/portal/orders')
     def submit(body: Project, cid=Depends(customer_auth)):
+        if len(body.project_name.strip()) > 20:
+            raise HTTPException(422, 'Order ID must be 20 characters or fewer')
         oid = key('project:', str(cid)+':'+body.submission_key)
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
@@ -2355,6 +2363,14 @@ def register(app, s):
             if old:
                 return portal_view(enrich(c, old))
             p = profile(c, cid)
+            suffix = body.project_name.strip()
+            prefix = (p.get('customer_code') or '').strip()
+            for historical in records(c, 'project', cid):
+                previous = (historical.get('order_number') or '').strip()
+                if prefix and previous.casefold().startswith((prefix + '-').casefold()):
+                    previous = previous[len(prefix) + 1:]
+                if (previous and previous.casefold() == suffix.casefold()) or (historical.get('project_name') or '').strip().casefold() == suffix.casefold():
+                    raise HTTPException(409, 'This Order ID has already been used on one of your orders. Enter a unique Order ID.')
             d = {**calculate(c, body), 'id': oid, 'order_number': assign_business_number(c, p, body.project_name), 'order_number_confirmed':False, 'customer_id': cid, 'company': p['company'],
                  'customer_type': p.get('customer_type') or 'wholesale',
                  'contact_name': p['contact_name'], 'email': p['email'], 'phone': p['phone'],
@@ -2373,6 +2389,69 @@ def register(app, s):
                 c.execute('BEGIN IMMEDIATE')
             backfill_order_dates(c)
             return [portal_view(enrich(c, d)) for d in records(c, 'project', cid)]
+
+    def active_rebate_rules(c):
+        saved = sorted(records(c, 'rebate_rule'), key=lambda rule: rule['effective_from'])
+        if not saved:
+            return [{'effective_from': '1900-01-01', 'threshold': '10000.00', 'rate': '0.05'}]
+        return saved
+
+    @app.get('/api/portal/rebates')
+    def portal_rebates(cid=Depends(customer_auth)):
+        with s.db() as c:
+            rules = active_rebate_rules(c)
+            orders = records(c, 'project', cid)
+            groups = {}
+            for d in orders:
+                paid = d.get('deposit_paid_at')
+                if not paid or d.get('status') == 'draft' or d.get('currency') != 'NZD':
+                    continue
+                deposit_day = d.get('order_date') or order_date_from_timestamp(paid) or str(paid)[:10]
+                applicable = [rule for rule in rules if rule['effective_from'] <= deposit_day]
+                rule = applicable[-1] if applicable else rules[0]
+                month = deposit_day[:7]
+                bucket_key = (month, rule['effective_from'])
+                entry = groups.setdefault(bucket_key, {'month': month, 'rule': rule, 'orders': [], 'subtotal': Decimal('0')})
+                amount = Decimal(str(d.get('subtotal') or '0'))
+                entry['subtotal'] += amount
+                entry['orders'].append((d, deposit_day, amount))
+            monthly = {}
+            for (month, _), group in groups.items():
+                rule = group['rule']
+                threshold, rate = Decimal(str(rule['threshold'])), Decimal(str(rule['rate']))
+                qualifies = group['subtotal'] > threshold
+                month_entry = monthly.setdefault(month, {'month': month, 'product_total': Decimal('0'), 'rebate': Decimal('0'), 'currency': 'NZD', 'orders': []})
+                month_entry['product_total'] += group['subtotal']
+                for d, deposit_day, amount in group['orders']:
+                    earned = (amount * rate).quantize(Decimal('.01'), rounding=ROUND_HALF_UP) if qualifies else Decimal('0.00')
+                    month_entry['rebate'] += earned
+                    month_entry['orders'].append({'order_id': d['id'], 'order_number': d.get('order_number'), 'order_date': deposit_day,
+                                                  'product_total': money(amount), 'currency': d['currency'], 'rate': float(rate) if qualifies else 0, 'rebate': money(earned),
+                                                  'qualifying_total': money(group['subtotal']), 'threshold': money(threshold)})
+            result = []
+            for month, entry in sorted(monthly.items(), reverse=True):
+                entry['product_total'] = money(entry['product_total'])
+                entry['rebate'] = money(entry['rebate'])
+                entry['orders'].sort(key=lambda order: order['order_date'])
+                result.append(entry)
+            return {'months': result, 'rules': rules}
+
+    @app.get('/api/operations/rebate-rules')
+    def list_rebate_rules(actor=Depends(s.require_admin)):
+        with s.db() as c:
+            return active_rebate_rules(c)
+
+    @app.post('/api/operations/rebate-rules')
+    def add_rebate_rule(body: RebateRuleEdit, actor=Depends(s.require_admin)):
+        rule = {'id': 'rebate-rule:' + body.effective_from.isoformat(), 'effective_from': body.effective_from.isoformat(),
+                'threshold': money(body.threshold), 'rate': str(body.rate), 'created_at': s.now(), 'actor': actor}
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            existing = next((item for item in records(c, 'rebate_rule') if item['effective_from'] == rule['effective_from']), None)
+            if existing:
+                raise HTTPException(409, 'A rebate rule already exists for that effective date')
+            put(c, 'rebate_rule', rule)
+            return rule
 
     @app.get('/api/operations/orders')
     def orders(actor=Depends(s.auth)):

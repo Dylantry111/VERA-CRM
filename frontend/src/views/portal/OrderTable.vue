@@ -150,8 +150,8 @@ async function openAddons(window: any, index: number) {
 }
 function onAddonDialogClick(event: MouseEvent) { if (event.target === addonDialog.value) addonDialog.value?.close(); }
 function fieldLabel(f: any) { return locale.value === "zh" ? f.label_zh : f.label_en; }
-// Customers choose by material, so the series name always carries it (VERA Classic · PVC Premium).
-function productLabel(p: any) { return [locale.value === "zh" ? p.name_zh : p.name_en, p.material].filter(Boolean).join(" · "); }
+// Lead with the material, while keeping the series beside it to distinguish similar materials.
+function productLabel(p: any) { return [p.material, locale.value === "zh" ? p.name_zh : p.name_en].filter(Boolean).join(" · "); }
 function newWindow(): any {
   const first = shutterProducts.value[0];
   const options: Record<string,string> = {};
@@ -242,7 +242,7 @@ load();
     <div v-if="loading" class="notice">{{ tx("正在加载产品…", "Loading products…") }}</div>
     <template v-else>
       <section class="order-fields">
-        <label>{{ tx("订单名称", "Order name") }} *<input v-model="draft.project_name" maxlength="200" :placeholder="tx('例如：Sterling House', 'e.g. Sterling House')" /></label>
+        <label>{{ tx("订单编号", "Order ID") }} *<input v-model="draft.project_name" maxlength="20" :placeholder="tx('最多 20 个字符', 'Up to 20 characters')" /><small class="field-hint">{{ draft.project_name.length }}/20 · {{ tx("请使用唯一编号", "Use a unique ID") }}</small></label>
         <label v-if="draft.installation_required" class="address-field">{{ tx("施工地址", "Installation address") }} *<input v-model="draft.site_address" maxlength="1000" required /></label>
         <label v-else class="address-field address-optional">{{ tx("施工地址", "Installation address") }} · {{ tx("仅安装时填写", "Only needed for installation") }}<input v-model="draft.site_address" maxlength="1000" :placeholder="tx('无需安装可留空', 'Leave blank for supply-only orders')" /></label>
         <label class="install-check"><input v-model="draft.installation_required" type="checkbox" />{{ tx("需要安装", "Installation required") }}</label>
@@ -250,7 +250,7 @@ load();
       <div class="sheet-title"><div><h2>{{ tx("窗户明细", "Window Details") }}</h2><p>{{ tx("必填列标有 *。表格可横向滚动。", "Required fields are marked *. Scroll horizontally to see all columns.") }}</p></div><button type="button" class="add-row" @click="addWindow">＋ {{ tx("添加一行", "Add Row") }}</button></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th class="row-num">#</th><th>{{ tx("窗户位置 / 名称", "Window Location / Name") }} *</th><th>{{ tx("宽 (mm)", "Width (mm)") }} *</th><th>{{ tx("高 / Drop (mm)", "Height / Drop (mm)") }} *</th><th>{{ tx("产品系列", "Product Series") }} *</th><th>{{ tx("开合方式", "Opening Style") }}</th><th>{{ tx("扇数", "Panels") }} *</th><th>{{ tx("布局代码", "Layout Code") }}</th><th>{{ tx("竖柱", "VT Post") }}</th><th>{{ tx("横柱", "HT Post") }}</th><th>{{ tx("中横档", "Midrail") }}</th><th>{{ tx("框型", "Frame") }} *</th><th>{{ tx("叶片尺寸", "Louver Size") }} *</th><th>{{ tx("颜色", "Colour") }} *</th><th>{{ tx("控制杆", "Control Rod") }} *</th><th>{{ tx("安装尺寸", "Fitting") }} *</th><th>{{ tx("附加项 / 特殊要求", "Add-ons / Special Request") }}</th><th>{{ tx("操作", "Actions") }}</th><th class="price-col">{{ tx("行金额（含附加项）", "Line total (incl. add-ons)") }}</th></tr></thead>
+          <thead><tr><th class="row-num">#</th><th>{{ tx("窗户位置 / 名称", "Window Location / Name") }} *</th><th>{{ tx("宽 (mm)", "Width (mm)") }} *</th><th>{{ tx("落差 (mm)", "DROP (mm)") }} *</th><th>{{ tx("材料 / 系列", "Material / Series") }} *</th><th>{{ tx("开合方式", "Opening Style") }}</th><th>{{ tx("扇数", "Panels") }} *</th><th>{{ tx("布局代码", "Layout Code") }}</th><th>{{ tx("竖柱", "VT Post") }}</th><th>{{ tx("横柱", "HT Post") }}</th><th>{{ tx("中横档", "Midrail") }}</th><th>{{ tx("框型", "Frame") }} *</th><th>{{ tx("叶片尺寸", "Louver Size") }} *</th><th>{{ tx("颜色", "Colour") }} *</th><th>{{ tx("控制杆", "Control Rod") }} *</th><th>{{ tx("安装尺寸", "Fitting") }} *</th><th>{{ tx("附加项 / 特殊要求", "Add-ons / Special Request") }}</th><th>{{ tx("操作", "Actions") }}</th><th class="price-col">{{ tx("行金额（含附加项）", "Line total (incl. add-ons)") }}</th></tr></thead>
           <tbody>
             <tr v-for="(w,index) in draft.windows" :key="w.id">
               <td class="row-num">{{ index+1 }}</td>
@@ -330,4 +330,5 @@ load();
 .price-summary{position:sticky;bottom:0;z-index:3;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px 24px;margin-top:12px;padding:12px 16px;background:#f3f8f4;border:1px solid #cfe0d4;border-radius:8px;box-shadow:0 -4px 14px rgba(20,35,30,.06)}.summary-status{display:grid;gap:3px;font-size:12px;color:#5d6d64}.summary-status strong{color:#1b2421;font-size:14px}.summary-error{color:#8f3425}.summary-warn{color:#8a4d14}.price-summary dl{display:flex;flex-wrap:wrap;gap:6px 22px;margin:0;transition:opacity .2s}.price-summary dl.stale{opacity:.55}.price-summary dl div{display:grid;gap:1px}.price-summary dt{font-size:11px;color:#62716b}.price-summary dd{margin:0;font-size:14px;font-weight:650;white-space:nowrap}.price-summary .summary-total dd{font-size:18px;color:#0f6e5c}
 @media(max-width:760px){.price-summary{position:static}.price-summary dl{gap:6px 16px}}
 .quote-total{padding:9px 11px;border-radius:5px;background:#edf5ef;color:#17523a;font-weight:650}.quote-error{font-size:12px;color:#8f3425}
+.table-wrap td:nth-child(3) input,.table-wrap td:nth-child(4) input{width:76px}.table-wrap td:nth-child(7) input{width:64px}.table-wrap td:nth-child(8) input,.table-wrap td:nth-child(9) input,.table-wrap td:nth-child(10) input,.table-wrap td:nth-child(11) input{width:72px}.field-hint{font-size:11px;color:#718078;font-weight:400}
 </style>

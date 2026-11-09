@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { formatDate, leadTimeLabel, normalizeStatus, paymentLabel, statusLabel } from "../../orderStatus";
+import { formatDate, leadTimeLabel, normalizeStatus, statusLabel } from "../../orderStatus";
 import { portalRequest } from "../../portal-api";
 
 const { locale } = useI18n();
@@ -25,12 +25,6 @@ const STATUS_GROUPS = [
   { key: "ready", zh: "可提货", en: "Ready" },
   { key: "complete", zh: "已完成", en: "Complete" },
 ];
-const PAYMENT_GROUPS = [
-  { key: "all", zh: "全部付款状态", en: "Any payment status" },
-  { key: "deposit_unpaid", zh: "定金待付", en: "Deposit due" },
-  { key: "deposit_received", zh: "定金已付", en: "Deposit paid" },
-  { key: "paid", zh: "已结清", en: "Paid in full" },
-];
 const DATE_RANGES = [
   { key: "all", zh: "全部日期", en: "Any date" },
   { key: "30", zh: "近 30 天", en: "Last 30 days" },
@@ -40,16 +34,14 @@ const DATE_RANGES = [
 ];
 
 const status = ref(String(route.query.status || "all"));
-const paymentFilter = ref(String(route.query.payment || "all"));
 const range = ref(String(route.query.range || "all"));
 const from = ref(String(route.query.from || ""));
 const to = ref(String(route.query.to || ""));
 const search = ref(String(route.query.q || ""));
 
-watch([status, paymentFilter, range, from, to, search], () => {
+watch([status, range, from, to, search], () => {
   const query: Record<string, string> = {};
   if (status.value !== "all") query.status = status.value;
-  if (paymentFilter.value !== "all") query.payment = paymentFilter.value;
   if (range.value !== "all") query.range = range.value;
   if (range.value === "custom" && from.value) query.from = from.value;
   if (range.value === "custom" && to.value) query.to = to.value;
@@ -93,23 +85,17 @@ function matchesSearch(order: any): boolean {
 
 const sorted = computed(() => [...orders.value].sort((a, b) => String(b.order_date || "").localeCompare(String(a.order_date || ""))));
 const datedAndSearched = computed(() => sorted.value.filter((order) => inRange(order) && matchesSearch(order)));
-const visible = computed(() => datedAndSearched.value.filter((order) => (status.value === "all" || statusGroup(order) === status.value) && (paymentFilter.value === "all" || order.payment_status === paymentFilter.value)));
+const visible = computed(() => datedAndSearched.value.filter((order) => status.value === "all" || statusGroup(order) === status.value));
 // Counts follow the date and search filters, so each chip says how many orders it would show.
 const counts = computed(() => {
   const out: Record<string, number> = { all: datedAndSearched.value.length };
   for (const order of datedAndSearched.value) out[statusGroup(order)] = (out[statusGroup(order)] || 0) + 1;
   return out;
 });
-const paymentCounts = computed(() => {
-  const out: Record<string, number> = { all: datedAndSearched.value.length };
-  for (const order of datedAndSearched.value) out[order.payment_status] = (out[order.payment_status] || 0) + 1;
-  return out;
-});
-const filtered = computed(() => status.value !== "all" || paymentFilter.value !== "all" || range.value !== "all" || Boolean(search.value.trim()));
+const filtered = computed(() => status.value !== "all" || range.value !== "all" || Boolean(search.value.trim()));
 
 function clearFilters() {
   status.value = "all";
-  paymentFilter.value = "all";
   range.value = "all";
   from.value = "";
   to.value = "";
@@ -196,11 +182,8 @@ function startNewOrder() {
             {{ locale === "zh" ? group.zh : group.en }}<span class="chip-count">{{ counts[group.key] || 0 }}</span>
           </button>
         </div></div>
-        <div class="filter-group"><strong>{{ tx("付款进度", "Payment progress") }}</strong><div class="status-chips payment-chips" role="group" :aria-label="tx('按付款进度', 'By payment progress')">
-          <button v-for="group in PAYMENT_GROUPS" :key="group.key" type="button" class="chip" :class="[`pay-filter-${group.key}`,{active:paymentFilter===group.key}]" :aria-pressed="paymentFilter===group.key" @click="paymentFilter=group.key">{{locale==='zh'?group.zh:group.en}}<span class="chip-count">{{paymentCounts[group.key]||0}}</span></button>
-        </div></div>
         <div class="filter-row">
-          <input v-model="search" type="search" class="search" :placeholder="tx('搜索订单号或订单名称', 'Search order no. or name')" :aria-label="tx('搜索订单', 'Search orders')" />
+          <input v-model="search" type="search" class="search" :placeholder="tx('搜索订单编号或地址', 'Search order IDs or address')" :aria-label="tx('搜索订单', 'Search orders')" />
           <label class="range">
             <span>{{ tx("下单日期", "Order date") }}</span>
             <select v-model="range">
@@ -222,14 +205,13 @@ function startNewOrder() {
 
       <div v-else class="order-table" role="table" :aria-label="tx('订单列表', 'Orders')">
         <div class="order-row head" role="row">
-          <span role="columnheader">{{ tx("订单号", "Order ID") }}</span>
-          <span role="columnheader">{{ tx("订单名称", "Order name") }}</span>
+          <span role="columnheader">{{ tx("系统订单号", "Order number") }}</span>
+          <span role="columnheader">{{ tx("客户订单编号", "Your Order ID") }}</span>
           <span role="columnheader">{{ tx("订单日期（定金到账日）", "Order date (deposit paid)") }}</span>
           <span role="columnheader">{{ tx("状态", "Status") }}</span>
           <span role="columnheader">{{ tx("预计到货 (ETA)", "ETA") }}</span>
           <span role="columnheader" class="num">{{ tx("窗数", "Windows") }}</span>
           <span role="columnheader" class="num">{{ tx("总价", "Total") }}</span>
-          <span role="columnheader">{{ tx("付款", "Payment") }}</span>
         </div>
         <div
           v-for="order in visible"
@@ -240,14 +222,13 @@ function startNewOrder() {
           @click="viewOrder(order.id)"
           @keydown.enter="viewOrder(order.id)"
         >
-          <span role="cell" class="cell-number" :data-label="tx('订单号', 'Order ID')"><strong>{{ orderNumber(order) }}</strong></span>
-          <span role="cell" class="cell-name" :data-label="tx('订单名称', 'Order name')">{{ order.project_name }}<small v-if="order.site_address">{{ order.site_address }}</small></span>
+          <span role="cell" class="cell-number" :data-label="tx('系统订单号', 'Order number')"><strong>{{ orderNumber(order) }}</strong></span>
+          <span role="cell" class="cell-name" :data-label="tx('客户订单编号', 'Your Order ID')">{{ order.project_name }}<small v-if="order.site_address">{{ order.site_address }}</small></span>
           <span role="cell" class="cell-date" :data-label="tx('订单日期（定金到账日）', 'Order date (deposit paid)')">{{ formatDate(order.order_date, locale) || "—" }}</span>
           <span role="cell" class="cell-status" :data-label="tx('状态', 'Status')"><span class="order-status" :class="`status-${normalizeStatus(order.status)}`">{{ statusLabel(order, locale) }}</span></span>
           <span role="cell" class="cell-eta" :data-label="tx('预计到货', 'ETA')"><span :class="`eta-${etaText(order).tone}`">{{ etaText(order).text }}</span><small v-if="order.batch_name && etaText(order).tone !== 'muted'">{{ order.batch_name }}</small></span>
           <span role="cell" class="cell-windows num" :data-label="tx('窗数', 'Windows')">{{ windowCount(order) }}</span>
           <span role="cell" class="cell-total num" :data-label="tx('总价', 'Total')">{{ money(order) }}</span>
-          <span role="cell" class="cell-payment" :data-label="tx('付款', 'Payment')"><span class="order-payment" :class="`pay-${order.payment_status}`">{{ paymentLabel(order.payment_status, locale) }}</span></span>
         </div>
       </div>
     </template>
@@ -446,7 +427,7 @@ button.clear {
 
 .order-row {
   display: grid;
-  grid-template-columns: 1.3fr 1.6fr 0.9fr 1.1fr 1.2fr 0.5fr 0.9fr 1fr;
+  grid-template-columns: 1.3fr 1.6fr 0.9fr 1.1fr 1.2fr 0.5fr 0.9fr;
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
@@ -581,7 +562,6 @@ button.clear {
   .cell-number { grid-row: 1; grid-column: 1 / 3; }
   .cell-status { grid-row: 1; grid-column: 3; text-align: right; }
   .cell-name { grid-row: 2; grid-column: 1 / -1; font-weight: 600; }
-  .cell-payment { grid-column: 1 / -1; }
 
   .cell-date::before,
   .cell-eta::before,

@@ -15,7 +15,6 @@ const messages = {
       talk: "预约沟通",
       crm: "CRM",
     },
-    switchTo: "English",
     sample: "示例，待客户确认",
     placeholderArt: "示意画面",
     home: {
@@ -112,7 +111,6 @@ const messages = {
       talk: "Request a Conversation",
       crm: "CRM",
     },
-    switchTo: "中文",
     sample: "Sample, pending confirmation",
     placeholderArt: "Illustrative image",
     home: {
@@ -197,9 +195,9 @@ const messages = {
   },
 };
 
-const stored = localStorage.getItem("vera-locale");
-const locale = stored === "en" || stored === "zh" ? stored : "en";
-document.documentElement.lang = locale;
+const locale = "en";
+localStorage.removeItem("vera-locale");
+document.documentElement.lang = "en";
 
 export const i18n = createI18n({
   legacy: false,

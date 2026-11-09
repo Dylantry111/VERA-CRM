@@ -19,12 +19,6 @@ onMounted(()=>{updateScroll();window.addEventListener('scroll',updateScroll,{pas
 onBeforeUnmount(()=>window.removeEventListener('scroll',updateScroll));
 watch(()=>route.path,()=>{menuOpen.value=false;updateScroll()});
 
-function toggleLocale() {
-  const next = locale.value === "zh" ? "en" : "zh";
-  locale.value = next;
-  localStorage.setItem("vera-locale", next);
-  document.documentElement.lang = next === "zh" ? "zh" : "en";
-}
 </script>
 
 <template>
@@ -49,9 +43,6 @@ function toggleLocale() {
         <router-link to="/contact">{{ t("nav.contact") }}</router-link>
         <router-link to="/trade-resources">Trade Resources</router-link>
       </nav>
-      <button type="button" class="secondary" @click="toggleLocale">
-        {{ t("switchTo") }}
-      </button>
     </header>
     <router-view />
     <SiteFooter v-if="!workbench && !portalWorkspace" />

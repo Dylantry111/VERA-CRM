@@ -87,12 +87,6 @@ async function load() {
   if (who.role === "admin") users.value = await request("users");
 }
 
-function toggleLocale() {
-  const next = locale.value === "zh" ? "en" : "zh";
-  locale.value = next;
-  localStorage.setItem("vera-locale", next);
-  document.documentElement.lang = next === "zh" ? "zh" : "en";
-}
 
 async function changePassword() {
   if (passwordForm.next !== passwordForm.confirm) {
@@ -193,7 +187,6 @@ onMounted(() => {
           <summary :aria-label="tx('账户菜单', 'Account menu')" :title="me.name"><span>{{ (me.name || 'V').slice(0, 1) }}</span></summary>
           <div class="account-dropdown">
             <div class="account-identity"><strong>{{ me.name }}</strong><small>{{ me.role === 'admin' ? tx('管理员', 'Admin') : tx('员工', 'Staff') }}</small></div>
-            <button type="button" @click="toggleLocale(); closeAccountMenu()">{{ locale === 'zh' ? 'English' : '中文' }}</button>
             <button type="button" @click="passwordOpen = !passwordOpen; closeAccountMenu()">{{ tx('修改密码', 'Change password') }}</button>
             <button type="button" @click="logout(); closeAccountMenu()">{{ tx('退出', 'Sign out') }}</button>
           </div>
