@@ -28,10 +28,18 @@ const product = (id: number | "") => catalog.value.find(p => Number(p.id) === Nu
 function schemaFields(id: number | "") { return product(id)?.configuration_schema || []; }
 const BASE_REQUIRED_FIELDS = new Set(["window_name", "width_mm", "height_mm", "product_id"]);
 const CURRENT_PANEL_REQUIRED_CODES = new Set(["Shutters_PVC_Eco", "Shutters_PVC", "Shutters_Pinewood", "Shutters_Basswood", "VERA_Ashwood_provisional"]);
+function isTrackFrameStyle(window: any) {
+  const style = String(window.options?.opening_style || "").trim().toLowerCase().replace(/\s+/g, " ");
+  return ["tracked by fold", "tracked bifold", "tracked sliding"].includes(style);
+}
 function isRequired(window: any, key: string) {
   if (BASE_REQUIRED_FIELDS.has(key)) return true;
   const selected = product(window.product_id);
   if (key === "panel_count") return selected?.required_fields ? selected.required_fields.includes(key) : CURRENT_PANEL_REQUIRED_CODES.has(selected?.source_code || "");
+  if (selected?.category === "shutters" && ["opening_style", "layout_code"].includes(key)) return true;
+  if (key === "vt_post") return /t/i.test(String(window.options?.layout_code || ""));
+  if (key === "midrail") return Number(window.height_mm) > 1500;
+  if (key === "frame" && isTrackFrameStyle(window)) return true;
   return schemaFields(window.product_id).some((field: any) => field.key === key && field.required === true);
 }
 function fieldsFor(window: any) { return schemaFields(window.product_id).filter((f: any) => !["colour", "louver_size", "fitting"].includes(f.key)); }
@@ -57,6 +65,13 @@ function onSeriesChange(window: any) {
     if (field?.choices?.length && !field.choices.includes(window.options[key])) window.options[key] = field.choices[0];
   }
   syncOpeningStyle(window.options);
+  if (isTrackFrameStyle(window)) window.options.frame = "Track System";
+  else if (window.options.frame === "Track System") delete window.options.frame;
+}
+function onOpeningStyleChange(window: any) {
+  syncOpeningStyle(window.options);
+  if (isTrackFrameStyle(window)) window.options.frame = "Track System";
+  else if (window.options.frame === "Track System") delete window.options.frame;
 }
 function addonLocked(window: any, key: string) { return isTrackAddon(key) && trackAddonsLocked(window.options); }
 function setAddon(window: any, key: string, value: string) {
@@ -210,6 +225,12 @@ async function load() {
 function checkWindow(w: any, index: number) {
   if (!w.window_name.trim()) return tx(`第 ${index + 1} 行请填写窗户名称。`, `Row ${index + 1}: enter a window name.`);
   if (!w.product_id || !(Number(w.width_mm) > 0) || !(Number(w.height_mm) > 0) || (isRequired(w, "panel_count") && !(Number(w.panel_count) > 0))) return tx(`第 ${index + 1} 行的系列、宽、高${isRequired(w, "panel_count") ? "和扇数" : ""}都必须填写。`, `Row ${index + 1}: series, width, height${isRequired(w, "panel_count") ? " and panels" : ""} are required.`);
+  const conditionalRequired = ["opening_style", "layout_code", "vt_post", "midrail", "frame"].find((key) => isRequired(w, key) && !String(w.options?.[key] || "").trim());
+  if (conditionalRequired) {
+    const labels: Record<string, [string, string]> = { opening_style: ["开合方式", "Opening Style"], layout_code: ["布局代码", "Layout Code"], vt_post: ["竖柱", "VT Post"], midrail: ["中横档", "Midrail"], frame: ["框型", "Frame"] };
+    const label = labels[conditionalRequired];
+    return tx(`第 ${index + 1} 行请填写${label[0]}。`, `Row ${index + 1}: ${label[1]} is required.`);
+  }
   for (const f of schemaFields(w.product_id)) {
     if (f.required && !w.options[f.key]) return tx(`第 ${index + 1} 行请填写${f.label_zh}。`, `Row ${index + 1}: ${f.label_en} is required.`);
     if (f.choices?.length && w.options[f.key] && !f.choices.includes(w.options[f.key])) return tx(`第 ${index + 1} 行的${f.label_zh}与所选系列不匹配。`, `Row ${index + 1}: ${f.label_en} is not valid for the selected series.`);
@@ -253,7 +274,14 @@ load();
         <label class="order-id-field"><span class="field-label">{{ tx("订单编号", "Order ID") }}</span><input class="required-input" v-model="draft.project_name" maxlength="20" :placeholder="tx('最多 20 个字符', 'Up to 20 characters')" /><small class="field-hint">{{ draft.project_name.length }}/20 · {{ tx("请使用唯一编号", "Use a unique ID") }}</small></label>
         <label v-if="draft.installation_required" class="address-field"><span class="field-label">{{ tx("施工地址", "Installation address") }}</span><input class="required-input" v-model="draft.site_address" maxlength="1000" required /><small class="field-hint">&nbsp;</small></label>
         <label v-else class="address-field address-optional"><span class="field-label">{{ tx("施工地址", "Installation address") }} · {{ tx("仅安装时填写", "Only needed for installation") }}</span><input v-model="draft.site_address" maxlength="1000" :placeholder="tx('无需安装可留空', 'Leave blank for supply-only orders')" /><small class="field-hint">{{ tx("选择安装后，此项变为必填。", "Required when installation is selected.") }}</small></label>
-        <label class="install-check"><input v-model="draft.installation_required" type="checkbox" />{{ tx("需要安装", "Installation required") }}</label>
+        <section class="install-mode-field" :aria-label="tx('订单类型','Order type')">
+          <span class="field-label">{{ tx("订单类型", "Order type") }}</span>
+          <div class="install-mode" role="radiogroup" :aria-label="tx('订单类型','Order type')">
+            <label class="install-choice" :class="{ selected: !draft.installation_required }"><input v-model="draft.installation_required" type="radio" name="order-type" :value="false" /><span>{{ tx("仅供货", "Supply Only") }}</span></label>
+            <label class="install-choice" :class="{ selected: draft.installation_required }"><input v-model="draft.installation_required" type="radio" name="order-type" :value="true" /><span>{{ tx("含安装", "Installed") }}</span></label>
+          </div>
+          <small class="field-hint">&nbsp;</small>
+        </section>
       </section>
       <div class="sheet-title"><div><h2>{{ tx("窗户明细", "Window Details") }}</h2><p>{{ tx("高亮输入框为必填；选择产品系列后会按该产品自动调整。表格可横向滚动。", "Highlighted fields are required and update for the selected product. Scroll horizontally to see all columns.") }}</p></div></div>
       <div class="table-wrap">
@@ -266,13 +294,13 @@ load();
               <td><input v-model="w.width_mm" :class="{ 'required-input': isRequired(w,'width_mm') }" inputmode="decimal" /></td>
               <td><input v-model="w.height_mm" :class="{ 'required-input': isRequired(w,'height_mm') }" inputmode="decimal" /></td>
               <td><select v-model.number="w.product_id" :class="{ 'required-input': isRequired(w,'product_id') }" @change="onSeriesChange(w)"><option value="">{{ tx("选择系列", "Select") }}</option><option v-for="p in shutterProducts" :key="p.id" :value="p.id">{{ productLabel(p) }}</option></select></td>
-              <td><select v-if="choicesFor(w,'opening_style').length" v-model="w.options.opening_style" :class="{ 'required-input': isRequired(w,'opening_style') }" @change="syncOpeningStyle(w.options)"><option v-for="v in choicesFor(w,'opening_style')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.opening_style" :class="{ 'required-input': isRequired(w,'opening_style') }" @change="syncOpeningStyle(w.options)" /></td>
+              <td><select v-if="choicesFor(w,'opening_style').length" v-model="w.options.opening_style" :class="{ 'required-input': isRequired(w,'opening_style') }" @change="onOpeningStyleChange(w)"><option value="">—</option><option v-for="v in choicesFor(w,'opening_style')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.opening_style" :class="{ 'required-input': isRequired(w,'opening_style') }" @change="onOpeningStyleChange(w)" /></td>
               <td><input v-model.number="w.panel_count" :class="{ 'required-input': isRequired(w,'panel_count') }" type="text" inputmode="numeric" /></td>
               <td><input v-model="w.options.layout_code" :class="{ 'required-input': isRequired(w,'layout_code') }" /></td>
               <td><input v-model="w.options.vt_post" :class="{ 'required-input': isRequired(w,'vt_post') }" /></td>
               <td><input v-model="w.options.ht_post" :class="{ 'required-input': isRequired(w,'ht_post') }" /></td>
               <td><input v-model="w.options.midrail" :class="{ 'required-input': isRequired(w,'midrail') }" /></td>
-              <td><select v-if="choicesFor(w,'frame').length" v-model="w.options.frame" :class="{ 'required-input': isRequired(w,'frame') }"><option value="">—</option><option v-for="v in choicesFor(w,'frame')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.frame" :class="{ 'required-input': isRequired(w,'frame') }" /></td>
+              <td><select v-if="isTrackFrameStyle(w)" v-model="w.options.frame" class="required-input"><option value="Track System">Track System</option></select><select v-else-if="choicesFor(w,'frame').length" v-model="w.options.frame" :class="{ 'required-input': isRequired(w,'frame') }"><option value="">—</option><option v-for="v in choicesFor(w,'frame')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.frame" :class="{ 'required-input': isRequired(w,'frame') }" /></td>
               <td><select v-model="w.options.louver_size" :class="{ 'required-input': isRequired(w,'louver_size') }"><option value="">—</option><option v-for="v in louverChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
               <td><select v-model="w.options.colour" :class="{ 'required-input': isRequired(w,'colour') }"><option value="">—</option><option v-for="v in colorChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
               <td><select v-if="choicesFor(w,'control_rod').length" v-model="w.options.control_rod" :class="{ 'required-input': isRequired(w,'control_rod') }"><option value="">—</option><option v-for="v in choicesFor(w,'control_rod')" :key="v" :value="v">{{ v }}{{ rodPriceHint(v) }}</option></select><input v-else v-model="w.options.control_rod" :class="{ 'required-input': isRequired(w,'control_rod') }" /></td>
@@ -291,6 +319,7 @@ load();
                 <span v-else class="muted">—</span>
               </td>
             </tr>
+            <tr class="add-row-tr"><td class="row-num add-row-cell"><button type="button" class="add-window-row" :aria-label="tx('添加一行','Add a row')" :title="tx('添加一行','Add a row')" @click="addWindow"><Plus :size="18" aria-hidden="true" /></button></td><td class="add-row-fill" colspan="18"></td></tr>
           </tbody>
         </table>
         <dialog ref="addonDialog" class="addon-dialog" :aria-label="tx('附加项','Add-ons')" @close="addonTarget = null" @click="onAddonDialogClick">
@@ -307,7 +336,6 @@ load();
           </form>
         </dialog>
       </div>
-      <div class="add-window-row-wrap"><button type="button" class="add-window-row" :aria-label="tx('添加一行','Add a row')" :title="tx('添加一行','Add a row')" @click="addWindow"><Plus :size="20" aria-hidden="true" /></button></div>
       <section class="price-summary" aria-live="polite">
         <div class="summary-status">
           <strong>{{ tx("价格预览", "Price preview") }}</strong>
@@ -344,11 +372,21 @@ load();
 .order-fields label:not(.install-check){grid-template-rows:18px 40px 15px;align-content:start;gap:6px}
 .field-label{height:18px;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .install-check{align-self:end}
-.add-window-row-wrap{display:flex;justify-content:center;padding:12px 0 4px}
-.add-window-row{display:grid;place-items:center;width:42px;height:42px;min-height:42px;padding:0;border:1px solid #435a67;border-radius:50%!important;background:#354552;color:#fff;cursor:pointer;box-shadow:0 2px 7px rgba(40,52,58,.16)}
+.add-window-row{display:grid;place-items:center;width:28px;height:28px;min-height:28px;padding:0;border:1px solid #435a67;border-radius:50%!important;background:#354552;color:#fff;cursor:pointer;box-shadow:0 2px 7px rgba(40,52,58,.16)}
 .add-window-row:hover{background:#293b46;border-color:#293b46;transform:translateY(-1px)}
 .add-window-row:active{background:#1f303b;transform:translateY(0);box-shadow:inset 0 2px 4px rgba(0,0,0,.18)}
 .required-input{background:#e8eef0!important;border-color:#8a9ca5!important;box-shadow:inset 0 0 0 1px rgba(53,69,82,.08)}
 .required-input:focus{outline:2px solid #354552;outline-offset:1px}
 @media(max-width:760px){.order-fields{grid-template-columns:1fr}}
+.install-mode-field{display:grid;grid-template-rows:18px 40px 15px;align-content:start;gap:6px;min-width:112px}
+.install-mode{height:40px;display:grid;grid-template-rows:1fr 1fr;overflow:hidden;border:1px solid #9aabb3;border-radius:999px;background:#fff}
+.order-fields .install-mode .install-choice{position:relative;display:flex!important;grid-template-rows:none;align-items:center;min-height:0;height:19px;padding:0 10px;border:0!important;border-radius:0!important;background:#fff;color:#354552;font-size:11px!important;font-weight:650!important;line-height:1;cursor:pointer;white-space:nowrap}
+.install-choice:hover{background:#e8eef0!important}
+.install-choice.selected,.install-choice.selected:hover{background:#354552!important;color:#fff}
+.install-choice input{position:absolute;width:1px;height:1px;margin:0;opacity:0}
+.order-fields .install-choice input[type=radio]{width:1px;height:1px;padding:0;border:0}
+.install-choice:focus-within{outline:2px solid #354552;outline-offset:-2px;z-index:1}
+.add-row-tr td{height:36px;padding:3px 4px!important}
+.table-wrap td.add-row-cell{z-index:2;padding:3px 4px!important;background:#f5f7f5}
+.add-row-fill{border-right:0!important;background:#fff}
 </style>
