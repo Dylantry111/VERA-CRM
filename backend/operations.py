@@ -28,6 +28,12 @@ DEPOSIT_RATE = Decimal('0.60')
 ORDER_DATE_MIGRATION_ID = 'migration:order-date-from-deposit-v1'
 
 
+def goods_arrived(order):
+    """Treat warehouse-arrived batch/order progress as authoritative; line counts are not a billing gate."""
+    return (order.get('arrival_status') in ('arrived', 'delivered') or
+            order.get('status') in ('ready', 'arrived', 'complete', 'delivered', 'partially_delivered'))
+
+
 def order_date_from_timestamp(value):
     """Return the Auckland business date on which a deposit receipt made the order real."""
     if not value:
@@ -3011,7 +3017,7 @@ def register(app, s):
             if len({line.line_id for line in body.lines}) != len(body.lines):
                 raise HTTPException(422, 'Each line may occur only once per batch')
             field = 'arrived' if body.kind == 'arrival' else 'delivered'
-            if body.kind == 'delivery' and not all(l['arrived'] == l['quantity'] for l in d['lines']):
+            if body.kind == 'delivery' and not goods_arrived(d):
                 raise HTTPException(409, 'The whole order must have arrived before delivery')
             submitted = {q.line_id: q.quantity for q in body.lines}
             expected = {l['id']: l['quantity'] - l[field] for l in d['lines'] if l['quantity'] > l[field]}
@@ -3273,8 +3279,8 @@ def register(app, s):
             orders = [get(c, oid, 'project') for oid in dict.fromkeys(body.order_ids)]
             if len({(d['customer_id'], d['currency'], d['tax_basis']) for d in orders}) != 1:
                 raise HTTPException(422, 'Combine only one company, currency and tax basis')
-            if any(d['payment_status'] != 'deposit_received' or not all(line['arrived'] == line['quantity'] for line in d['lines']) for d in orders):
-                raise HTTPException(409, 'Balance invoices are available only after every line has arrived and the deposit is confirmed')
+            if any(d['payment_status'] != 'deposit_received' or not goods_arrived(d) for d in orders):
+                raise HTTPException(409, 'Balance invoices require confirmed deposit receipt and warehouse-arrived order progress')
             if any(d.get('balance_invoice_id') for d in orders):
                 raise HTTPException(409, 'An order already has a balance invoice')
             for rebate_id in body.rebate_ids:

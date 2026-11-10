@@ -153,13 +153,14 @@ const financeInvoices = computed(()=>invoices.value.filter(i=>!financeCustomer.v
 // Finance page work queues: each order or invoice lands in the one step that needs a staff action, or in "waiting"/"done".
 const SENT_INVOICE_STATES = ['sent','demo_sent','demo_suppressed','sending'];
 const invoiceSent = (invoice: Invoice) => SENT_INVOICE_STATES.includes(invoice.status);
-const allLinesArrived = (order: ProjectOrder) => order.lines.every((line) => line.arrived === line.quantity);
+const goodsArrived = (order: ProjectOrder) => order.arrival_status === 'arrived' || order.arrival_status === 'delivered' ||
+  ['ready', 'arrived', 'complete', 'delivered', 'partially_delivered'].includes(order.status);
 const balanceInvoiceFor = (order: ProjectOrder) => invoices.value.find((invoice) => invoice.kind === 'balance' && invoice.order_ids?.includes(order.id));
 const depositInvoiceFor = (order: ProjectOrder) => invoices.value.find((invoice) => invoice.kind === 'deposit' && invoice.order_ids?.includes(order.id)) || order.invoices?.find((invoice) => invoice.kind === 'deposit');
 const financeQueues = computed(() => {
   const depositDue = financeOrders.value.filter((order) => order.status !== 'pending_review' && order.payment_status === 'deposit_unpaid');
   const depositDueIds = new Set(depositDue.map((order) => order.id));
-  const balanceReady = financeOrders.value.filter((order) => order.payment_status === 'deposit_received' && allLinesArrived(order) && !balanceInvoiceFor(order));
+  const balanceReady = financeOrders.value.filter((order) => order.payment_status === 'deposit_received' && goodsArrived(order) && !balanceInvoiceFor(order));
   // A deposit invoice for an order still in step 1 is sent from step 1, so it is not listed twice.
   const toSend = financeInvoices.value.filter((invoice) => !invoiceSent(invoice) && invoice.payment_status !== 'received' &&
     !(invoice.kind === 'deposit' && invoice.order_ids?.some((id) => depositDueIds.has(id))));
@@ -185,7 +186,7 @@ function financeWaitingReason(order: ProjectOrder) {
   const balance = balanceInvoiceFor(order);
   if (balance?.payment_status === 'received' || order.payment_status === 'paid') return tx('已结清', 'Settled');
   if (balance) return tx('尾款已开', 'Balance invoiced');
-  if (order.payment_status === 'deposit_received' && !allLinesArrived(order)) return tx(`定金已收，等待到货（${orderStatus(order.status)}）`, `Deposit received; waiting for arrival (${orderStatus(order.status)})`);
+  if (order.payment_status === 'deposit_received' && !goodsArrived(order)) return tx(`定金已收，等待批次到仓（${orderStatus(order.status)}）`, `Deposit received; waiting for the shipment to reach the warehouse (${orderStatus(order.status)})`);
   return orderStatus(order.status);
 }
 function scrollFinanceStep(key: string) { document.getElementById(`fin-${key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
@@ -277,7 +278,6 @@ const picked = ref<string[]>([]);
 const invoicePick = ref<string[]>([]);
 const mailPreview = ref<MailPreview | null>(null);
 const transitRows = ref<{ order_id: string; status: string; reason?: string }[]>([]);
-const arrivalRows = ref<{ order_id: string; status: string; detail: string }[]>([]);
 const batch = reactive<Record<string, number>>({});
 const orderNumberConfirmation = reactive<Record<string, boolean>>({});
 const operationKeys = new Map<string, string>();
@@ -405,7 +405,7 @@ const nextOrderHint = computed(() => {
   if (order.payment_status==='deposit_unpaid') return tx('定金发票已生成；核实到账后记录定金已收。','The deposit invoice is ready; record receipt only after funds are confirmed.');
   if (order.status==='accepted') return tx('定金确认后下载供应商订单，再标为已下单。','After the deposit is confirmed, download the supplier order, then mark it ordered.');
   if (order.status==='supplier_ordered') return tx('供应商下单已记录；可将订单标为在途。','Supplier order recorded; mark it in transit when dispatched.');
-  if (order.status==='in_transit'||order.status==='partially_arrived') return tx('所有货物到齐后，记录整单到货。','Record the whole order as arrived once all goods are in.');
+  if (order.status==='in_transit'||order.status==='partially_arrived') return tx('批次到仓后，订单会自动转为可提货。','When the shipment reaches the warehouse, its orders automatically become ready for collection.');
   if (order.status==='arrived'||order.status==='ready'||order.status==='partially_delivered') return tx('货物已到，可记录提货或完成；账款在财务页单独跟进。','Goods are ready; record collection or completion. Track payment separately in finance.');
   return tx('订单已完成；在账款与返利中处理尾款。','Order completed; complete the balance in Accounts & rebates.');
 });
@@ -471,8 +471,7 @@ async function load() {
     const requested = String(route.query.balance_orders || '').split(',').filter(Boolean);
     if (requested.length) {
       const eligible = listed.filter(order => requested.includes(order.id) &&
-        String(order.customer_id) === financeCustomer.value && order.payment_status === 'deposit_received' &&
-        order.lines.length > 0 && order.lines.every(line => line.arrived === line.quantity) &&
+        String(order.customer_id) === financeCustomer.value && order.payment_status === 'deposit_received' && goodsArrived(order) &&
         !billed.some(invoice => invoice.kind === 'balance' && invoice.order_ids?.includes(order.id)));
       picked.value = eligible.map(order => order.id);
       if (eligible.length !== requested.length) {
@@ -480,7 +479,7 @@ async function load() {
       }
     } else if (financeCustomer.value && !picked.value.length) {
       const eligible=listed.filter(order=>String(order.customer_id)===financeCustomer.value &&
-        order.payment_status==='deposit_received' && order.lines.length > 0 && order.lines.every((line) => line.arrived === line.quantity) &&
+        order.payment_status==='deposit_received' && goodsArrived(order) &&
         !billed.some(invoice=>invoice.kind==='balance' && invoice.order_ids?.includes(order.id)));
       if(eligible.length===1) picked.value=[eligible[0].id];
     }
@@ -772,9 +771,9 @@ function transitOne(id:string) {
   });
 }
 
-function remainingLines(order: ProjectOrder, kind: "arrival" | "delivery") {
+function remainingLines(order: ProjectOrder) {
   return order.lines
-    .map((line) => ({ line_id: line.id, quantity: Math.max(0, kind === "arrival" ? line.quantity-line.arrived : line.quantity-line.delivered) }))
+    .map((line) => ({ line_id: line.id, quantity: Math.max(0, line.quantity-line.delivered) }))
     .filter((line) => line.quantity > 0);
 }
 
@@ -807,78 +806,28 @@ function optionText(line: Line) {
   return Object.entries(line.options || {}).map(([name, value]) => `${labels[name] ? tx(...labels[name]) : name.replaceAll("_", " ")}: ${value}`).join(" · ");
 }
 
-async function arriveSelected() {
-  const targets = orders.value.filter((order) => picked.value.includes(order.id));
-  if (!targets.length) {
-    error.value = tx("先勾选要记录到货的订单。", "Select the orders whose arrival to record.");
+function fulfil(order: ProjectOrder) {
+  if (!goodsArrived(order)) {
+    fulfilError.value = tx("请先将运输批次标记为到仓。", "Mark the shipment as arrived at the warehouse first.");
     return;
   }
-  busy.value = true;
-  error.value = "";
-  notice.value = "";
-  arrivalRows.value = [];
-  for (const order of targets) {
-    const lines = remainingLines(order, "arrival");
-    if (!lines.length) {
-      arrivalRows.value.push({ order_id: order.id, status: "skipped", detail: tx("没有待确认的到货数量", "No outstanding arrival quantities") });
-      continue;
-    }
-    const signature = JSON.stringify({ order_id: order.id, kind: "arrival", lines });
-    const operationKey = stableKey(signature);
-    try {
-      const result = await request<{ notification?: { status: string } }>("operations/fulfilment", {
-        order_id: order.id,
-        kind: "arrival",
-        operation_key: operationKey,
-        lines,
-      });
-      operationKeys.delete(signature);
-      for (const line of order.lines) batch[`${order.id}:${line.id}:arrival`] = 0;
-      arrivalRows.value.push({
-        order_id: order.id,
-        status: "success",
-        detail: result.notification ? mailStatus(result.notification.status) : tx("已记录", "Recorded"),
-      });
-    } catch (cause) {
-      arrivalRows.value.push({ order_id: order.id, status: "failed", detail: cause instanceof Error ? cause.message : String(cause) });
-    }
-  }
-  try {
-    await load();
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
-  }
-  notice.value = arrivalRows.value.map((row) => `${orderLabel(row.order_id)}: ${row.status} ${row.detail}`).join("; ");
-  busy.value = false;
-}
-
-function fulfil(order: ProjectOrder, kind: "arrival" | "delivery") {
-  if (kind === "delivery" && !order.lines.every((line) => line.arrived === line.quantity)) {
-    fulfilError.value = tx("全部货物到齐后才能安排整单交付。", "All goods must have arrived before the whole order can be delivered.");
-    return;
-  }
-  const lines = remainingLines(order, kind);
+  const lines = remainingLines(order);
   if (!lines.length) {
-    fulfilError.value = kind === 'arrival'
-      ? tx('整单已记录到货。', 'The whole order is already recorded as arrived.')
-      : tx('整单已记录交付。', 'The whole order is already recorded as delivered.');
+    fulfilError.value = tx('整单已记录交付。', 'The whole order is already recorded as delivered.');
     return;
   }
   fulfilError.value = '';
-  const signature = JSON.stringify({ order_id: order.id, kind, lines });
+  const signature = JSON.stringify({ order_id: order.id, kind: "delivery", lines });
   const operationKey = stableKey(signature);
   return act(async () => {
-    const result = await request<{ notification?: { status: string } }>("operations/fulfilment", {
+    await request("operations/fulfilment", {
       order_id: order.id,
-      kind,
+      kind: "delivery",
       operation_key: operationKey,
       lines,
     });
     operationKeys.delete(signature);
-    const mailed = result.notification ? mailStatus(result.notification.status) : "";
-    notice.value = kind === "arrival"
-      ? tx(`已记录整单到货。通知状态：${mailed || "无"}。收款状态不会被覆盖。`, `The whole order is recorded as arrived. Notification status: ${mailed || "none"}. Payment status is left unchanged.`)
-      : tx("已记录整单交付。", "The whole order is recorded as delivered.");
+    notice.value = tx("已记录整单交付。", "The whole order is recorded as delivered.");
   });
 }
 
@@ -1030,14 +979,14 @@ function autoEvidence(rows: ProjectOrder[]) {
     const ref = order.order_number || order.id;
     const money = `${order.currency || ""} ${order.total ?? "?"}`.trim();
     return tx(
-      `${ref}：订单总额 ${money}，每一行已到货，定金${deposit ? ` ${deposit.currency} ${deposit.amount}` : ""}已收`,
-      `${ref}: order total ${money}, every line arrived, deposit${deposit ? ` ${deposit.currency} ${deposit.amount}` : ""} received`,
+      `${ref}：订单总额 ${money}，批次已到仓，定金${deposit ? ` ${deposit.currency} ${deposit.amount}` : ""}已收`,
+      `${ref}: order total ${money}, shipment arrived at warehouse, deposit${deposit ? ` ${deposit.currency} ${deposit.amount}` : ""} received`,
     );
   });
   const more = rows.length > AUTO_EVIDENCE_MAX_ORDERS ? tx(`；另有 ${rows.length - AUTO_EVIDENCE_MAX_ORDERS} 单`, `; ${rows.length - AUTO_EVIDENCE_MAX_ORDERS} more orders`) : "";
   return tx(
-    `按系统记录生成：每一行都已到货且定金已收的订单，应收尾款=订单总额-已保存定金。${parts.join("；")}${more}。仅扣除本次明确选择的、早于本月的已确认返利。`,
-    `Generated from system records: orders with every line arrived and the deposit received; balance = order total minus the stored deposit. ${parts.join("; ")}${more}. Only rebates explicitly selected for this invoice are deducted.`,
+    `按系统记录生成：批次已到仓且定金已收的订单，应收尾款=订单总额-已保存定金。${parts.join("；")}${more}。仅扣除本次明确选择的、早于本月的已确认返利。`,
+    `Generated from system records: orders in warehouse-arrived batches with the deposit received; balance = order total minus the stored deposit. ${parts.join("; ")}${more}. Only rebates explicitly selected for this invoice are deducted.`,
   );
 }
 let lastAutoEvidence = "";
@@ -1051,8 +1000,8 @@ function settleSelected() {
   const rows = selectedOrders();
   const customerId = oneCompany(rows);
   if (customerId == null) return;
-  if (rows.some((order) => order.payment_status !== "deposit_received" || order.lines.some((line) => line.arrived !== line.quantity))) {
-    error.value = tx("只能给每一行都已到货且定金已收的订单开尾款。", "A balance invoice needs every line arrived and the deposit received.");
+  if (rows.some((order) => order.payment_status !== "deposit_received" || !goodsArrived(order))) {
+    error.value = tx("所选订单必须已收定金，且运输批次已到仓。", "Selected orders need a confirmed deposit and a shipment marked as arrived at the warehouse.");
     return;
   }
   if (settlementEvidence.value.trim().length < 5) {
@@ -1072,8 +1021,8 @@ function settleSelected() {
     const invoice = await request<Invoice>("operations/settlements", body);
     operationKeys.delete(JSON.stringify({ settle: orderIds, rebates: rebateIds, evidence: settlementEvidence.value.trim() }));
     notice.value = tx(
-      `已生成尾款草稿 ${invoiceLabel(invoice)}，金额 ${invoice.currency} ${invoice.amount}。部分到货或未收定金会被拒绝。发送仍是另一步。`,
-      `Balance draft ${invoiceLabel(invoice)} created for ${invoice.currency} ${invoice.amount}. Partial arrival or an unpaid deposit is refused. Sending stays a separate step.`,
+      `已生成尾款草稿 ${invoiceLabel(invoice)}，金额 ${invoice.currency} ${invoice.amount}。未收定金或批次未到仓会被拒绝。发送仍是另一步。`,
+      `Balance draft ${invoiceLabel(invoice)} created for ${invoice.currency} ${invoice.amount}. An unpaid deposit or a shipment not yet arrived is refused. Sending stays a separate step.`,
     );
     picked.value=[];
     balanceRebatePick.value=[];
@@ -1084,8 +1033,8 @@ function openBalanceInvoiceForPicked() {
   const rows = selectedOrders();
   const customerId = oneCompany(rows);
   if (customerId == null) return;
-  if (rows.some((order) => order.payment_status !== "deposit_received" || !order.lines.length || !allLinesArrived(order))) {
-    error.value = tx("尾款账单要求所选订单已收定金且所有货物均已到仓。", "Selected orders need a received deposit and every line fully arrived before a balance invoice can be created.");
+  if (rows.some((order) => order.payment_status !== "deposit_received" || !goodsArrived(order))) {
+    error.value = tx("所选订单必须已收定金，且运输批次已到仓。", "Selected orders need a confirmed deposit and a shipment marked as arrived at the warehouse.");
     return;
   }
   if (rows.some((order) => !!balanceInvoiceFor(order))) {
@@ -1424,7 +1373,7 @@ async function loadOrderProviders(orderId: string) {
       </aside>
 
       <div class="detail-panel">
-        <div v-if="workspace === 'projects' && picked.length" class="card batch-toolbar"><strong>{{ tx('已选', 'Selected') }} {{ picked.length }}</strong><button :disabled="busy" @click="transitSelected">{{ tx('批量标为在途','Mark in transit') }}</button><button :disabled="busy" @click="arriveSelected">{{ tx('批量记录到货','Record arrivals') }}</button><button class="secondary" @click="picked = []">{{ tx('取消选择','Clear selection') }}</button><p v-if="transitRows.length || arrivalRows.length">{{ notice }}</p></div>
+        <div v-if="workspace === 'projects' && picked.length" class="card batch-toolbar"><strong>{{ tx('已选', 'Selected') }} {{ picked.length }}</strong><button :disabled="busy" @click="transitSelected">{{ tx('批量标为在途','Mark in transit') }}</button><button class="secondary" @click="picked = []">{{ tx('取消选择','Clear selection') }}</button><p v-if="transitRows.length">{{ notice }}</p></div>
 
         <div class="section-content">
           <section v-if="activeSection === 'operations'" class="card section-card">
@@ -1459,7 +1408,7 @@ async function loadOrderProviders(orderId: string) {
                 <button type="button" :class="{active: detailSection === 'supplier'}" @click="detailSection = 'supplier'">{{ tx("供应商与导出", "Supplier & files") }}</button>
                 <button type="button" :class="{active: detailSection === 'invoices'}" @click="detailSection = 'invoices'">{{ tx("发票与收款", "Invoices & payments") }}</button>
                 <button type="button" :class="{active: detailSection === 'history'}" @click="detailSection = 'history'">{{ tx('操作记录','Activity') }}</button>
-              </nav><div class="next-action"><strong>{{ tx('建议下一步','Suggested next step') }}</strong><p>{{ nextOrderHint }}</p><RouterLink v-if="selectedOrder.status==='delivered' || selectedOrder.status==='complete' || (selectedOrder.payment_status==='deposit_received' && selectedOrder.lines.every(line => line.arrived === line.quantity))" :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('打开客户账款','Open customer accounts') }} →</RouterLink><button v-else-if="detailSection!==nextOrderSection(selectedOrder)" type="button" class="secondary" @click="detailSection=nextOrderSection(selectedOrder)">{{ tx('打开当前步骤','Open current step') }}</button></div></div>
+              </nav><div class="next-action"><strong>{{ tx('建议下一步','Suggested next step') }}</strong><p>{{ nextOrderHint }}</p><RouterLink v-if="selectedOrder.status==='delivered' || selectedOrder.status==='complete' || (selectedOrder.payment_status==='deposit_received' && goodsArrived(selectedOrder))" :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('打开客户账款','Open customer accounts') }} →</RouterLink><button v-else-if="detailSection!==nextOrderSection(selectedOrder)" type="button" class="secondary" @click="detailSection=nextOrderSection(selectedOrder)">{{ tx('打开当前步骤','Open current step') }}</button></div></div>
 <div v-show="detailSection === 'order'">              <div class="section-title-row"><h3>{{ tx('产品明细与客户提交配置','Product details and customer-submitted configuration') }}</h3><button type="button" class="secondary" @click="openSheetPreview">{{ tx('预览整单','Preview whole order') }}</button></div>
               <div class="table-scroll"><table class="quote-sheet">
                 <thead><tr>
@@ -1507,11 +1456,10 @@ async function loadOrderProviders(orderId: string) {
                   <div><dt>{{ tx('60% 定金 / 40% 尾款','60% deposit / 40% balance') }}</dt><dd>{{ quoteMoney(selectedOrder.deposit, selectedOrder.currency || 'NZD') }} · {{ quoteBalance(selectedOrder) }}</dd></div>
                 </dl>
               </div>
-              <h3 v-if="selectedOrder.status==='supplier_ordered' || ['in_transit','partially_arrived'].includes(selectedOrder.status) || selectedOrder.lines.some(line=>line.arrived>line.delivered)">{{ tx("履约操作", "Fulfilment actions") }}</h3>
+              <h3 v-if="selectedOrder.status==='supplier_ordered' || ['in_transit','partially_arrived'].includes(selectedOrder.status) || goodsArrived(selectedOrder)">{{ tx("履约操作", "Fulfilment actions") }}</h3>
               <div class="actions">
                 <button v-if="selectedOrder.status==='supplier_ordered'" type="button" class="secondary" :disabled="busy" @click="transitOne(selectedOrder.id)">{{ tx('标为在途','Mark in transit') }}</button>
-                <button v-if="['in_transit','partially_arrived'].includes(selectedOrder.status)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder, 'arrival')">{{ tx("确认整单货物已到齐", "Confirm all goods arrived") }}</button>
-                <button v-if="selectedOrder.lines.some(line=>line.arrived>line.delivered)" type="button" class="secondary" :disabled="busy || !selectedOrder.lines.every(line=>line.arrived===line.quantity)" @click="fulfil(selectedOrder, 'delivery')">{{ tx("记录整单交付", "Record whole-order completion") }}</button>
+                <button v-if="goodsArrived(selectedOrder) && selectedOrder.lines.some(line=>line.delivered<line.quantity)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder)">{{ tx("记录整单交付", "Record whole-order completion") }}</button>
               </div>
               <p v-if="fulfilError" class="fulfil-error" role="alert">{{ fulfilError }}</p>
               <div v-if="selectedOrder.status!=='pending_review'" class="actions"><button type="button" class="secondary" :disabled="busy" @click="downloadJobSheet(selectedOrder.id)">{{ tx('下载安装工作单','Download job sheet') }}</button></div>
@@ -1765,7 +1713,7 @@ async function loadOrderProviders(orderId: string) {
             </section>
 
             <section id="fin-balance" class="fin-block" :class="{ clear: !financeQueues.balanceReady.length }">
-              <header class="fin-block-head"><span class="fin-no">2</span><div><h3>{{ tx('开尾款','Create balance invoices') }}</h3><p>{{ tx('整单到货且定金已收的订单可以开尾款。勾选同一客户、同一币种的订单，生成尾款草稿；草稿不会直接发给客户。','Orders with every line arrived and the deposit received can be invoiced. Tick orders from one customer and currency to create a balance draft; drafts are not sent automatically.') }}</p></div><span class="fin-count">{{ financeQueues.balanceReady.length }}</span></header>
+              <header class="fin-block-head"><span class="fin-no">2</span><div><h3>{{ tx('开尾款','Create balance invoices') }}</h3><p>{{ tx('运输批次标记为到仓、且定金已收的订单可以开尾款。勾选同一客户、同一币种的订单，生成尾款草稿；草稿不会直接发给客户。','Orders in warehouse-arrived shipments with a received deposit can be invoiced. Tick orders from one customer and currency to create a balance draft; drafts are not sent automatically.') }}</p></div><span class="fin-count">{{ financeQueues.balanceReady.length }}</span></header>
               <p v-if="!financeQueues.balanceReady.length" class="fin-clear">✓ {{ tx('目前没有可以开尾款的订单','No orders ready for a balance invoice') }}</p>
               <template v-else>
                 <ul class="fin-rows">

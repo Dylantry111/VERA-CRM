@@ -45,14 +45,14 @@ const steps = computed(() => [
   {
     icon: Package,
     name: tx("在途·到货·交付", "Transit, arrival, delivery"),
-    hint: tx("按批次记录实际数量", "Record real batch quantities"),
+    hint: tx("按运输批次更新进度", "Update progress by shipment batch"),
     path: "/crm/projects",
     points: [
       tx("供应商发货后，在订单列表勾选订单，批量标记“在途”。", "After the supplier ships, tick the orders in the list and mark them in transit in one action."),
-      tx("在“明细与履约”右侧填“本次到货/本次交付”的实际数量再记录；左边的“累计”是已记录总数，提交后右侧会清空。", "In Lines & fulfilment, enter the real “this batch” arrival or delivery quantity and record it. The cumulative columns on the left show what is already recorded; the inputs clear after submit."),
-      tx("到货会生成通知记录；到货不能超过订购，交付不能超过已到货。", "Arrival creates a notification record. Arrivals cannot exceed the order and deliveries cannot exceed arrivals."),
+      tx("运输批次标记为到仓后，批次内订单会自动更新为可提货；无需逐个订单录入到货件数。", "When a shipment batch is marked arrived at the warehouse, its orders automatically become ready for collection; arrival quantities do not need to be entered order by order."),
+      tx("订单交付仍在订单明细中单独记录。", "Record collection or installation completion separately in the order details."),
     ],
-    note: tx("部分到货不等于已交付，也还不能开尾款。", "Partial arrival is not delivery and does not allow a balance invoice yet."),
+    note: tx("尾款开票以运输批次到仓和定金已收为准。", "Balance invoicing requires the shipment batch to be at the warehouse and the deposit to be received."),
   },
   {
     icon: Receipt,
@@ -60,7 +60,7 @@ const steps = computed(() => [
     hint: tx("合并多单 · 先出草稿", "Combine orders · draft first"),
     path: "/crm/finance",
     points: [
-      tx("在“账款与返利”勾选同一公司、同币种、每一行都已到货且定金已收的订单，点“生成尾款草稿”。", "Under Accounts & rebates, tick orders of one company and currency where every line has arrived and the deposit is received, then click Create balance draft."),
+      tx("在“账款与返利”勾选同一公司、同币种、批次已到仓且定金已收的订单，点“生成尾款草稿”。", "Under Accounts & rebates, tick orders of one company and currency whose shipment has arrived and whose deposit is received, then click Create balance draft."),
       tx("金额 = 所选订单总额 − 已存定金 − 本次明确选择的可用返利；每条返利抵扣会列在发票上。“规则说明”按所选订单自动生成，可以修改。", "Amount = selected order totals − stored deposits − rebates explicitly selected for this invoice. Each rebate credit is listed on the invoice. The rule note is generated from the selected orders and can be edited."),
       tx("草稿检查无误后再单独发送，收到款项后点“确认尾款收款”。", "Review the draft, send it as a separate step, and click Confirm balance receipt once the money has arrived."),
     ],
