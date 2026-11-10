@@ -9,7 +9,8 @@ import ProjectDesk from "../components/ProjectDesk.vue";
 import SampleDashboard from "../components/SampleDashboard.vue";
 import PortalCustomers from "../components/PortalCustomers.vue";
 import CrmGuide from "../components/CrmGuide.vue";
-import { FolderKanban, Users, BarChart3, Package, Settings, Truck, Wallet, BookOpen } from "lucide-vue-next";
+import MailView from "../components/MailView.vue";
+import { FolderKanban, Users, BarChart3, Package, Settings, Truck, Wallet, BookOpen, Mail as MailIcon } from "lucide-vue-next";
 import type { ApiProduct } from "../api";
 
 const { locale } = useI18n();
@@ -51,6 +52,7 @@ const nav = computed(() => [
   { key: "projects", label: tx("Orders", "Orders") },
   { key: "shipments", label: tx("Shipment", "Shipment") },
   { key: "customers", label: tx("Customer", "Customer"), badge: pendingTradeApplications.value },
+  { key: "mail", label: tx("邮件", "Mail") },
   { key: "providers", label: tx("Supplier", "Supplier") },
   { key: "finance", label: tx("Accounts and Rebates", "Accounts and Rebates") },
   { key: "products", label: tx("Product", "Product") },
@@ -180,13 +182,14 @@ onMounted(() => {
     <template v-else>
       <nav class="top-nav" :aria-label="tx('主导航','Main navigation')">
         <router-link to="/" class="crm-brand" :aria-label="tx('VERA 首页','VERA home')"><img src="/images/vera-logo.png" alt="VERA Shading Solutions" /></router-link>
-        <button v-for="item in nav" v-show="item.key !== 'users' || me.role === 'admin'" :key="item.key" type="button" :class="{ current: tab === item.key }" @click="openTab(item.key)">
+        <button v-for="item in nav" v-show="(item.key !== 'users' && item.key !== 'mail') || me.role === 'admin'" :key="item.key" type="button" :class="{ current: tab === item.key }" @click="openTab(item.key)">
           <BarChart3 v-if="item.key==='dashboard'" :size="18" aria-hidden="true" />
           <FolderKanban v-else-if="item.key==='projects'" :size="18" aria-hidden="true" />
           <Truck v-else-if="item.key==='shipments' || item.key==='providers'" :size="18" aria-hidden="true" />
           <Users v-else-if="item.key==='customers'" :size="18" aria-hidden="true" />
           <BookOpen v-else-if="item.key==='help'" :size="18" aria-hidden="true" />
           <Wallet v-else-if="item.key==='finance'" :size="18" aria-hidden="true" />
+          <MailIcon v-else-if="item.key==='mail'" :size="18" aria-hidden="true" />
           <Package v-else-if="item.key==='products'" :size="18" aria-hidden="true" />
           <Settings v-else-if="item.key==='users'" :size="18" aria-hidden="true" />
           <span>{{ item.label }}</span><span v-if="item.key === 'customers' && item.badge" class="nav-badge">{{ item.badge }}</span>
@@ -214,6 +217,7 @@ onMounted(() => {
       <ProjectDesk v-if="['projects','shipments','providers','finance'].includes(tab)" :key="tab" :workspace="tab" :email-enabled="emailEnabled" :email-mode="emailMode" :admin="me.role === 'admin'" />
       <CrmGuide v-if="tab==='help'" :demo="emailMode!=='live'" :delivery-enabled="emailEnabled" />
       <PortalCustomers v-if="tab === 'customers'" :admin="me.role === 'admin'" :email-enabled="emailEnabled" :email-mode="emailMode" @applications-updated="refreshTradeApplicationCount" />
+      <MailView v-if="tab === 'mail' && me.role === 'admin'" />
       <SampleDashboard v-if="tab === 'dashboard'" />
       <ProductWorkspace v-if="tab === 'products'" :admin="me.role === 'admin'" @updated="act(load)" />
       <div v-if="tab === 'users' && me.role === 'admin'" class="settings-layout">

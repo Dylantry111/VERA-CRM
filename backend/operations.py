@@ -21,7 +21,7 @@ WEBSITE_IMAGES = json.loads((Path(__file__).parent / "website_products.json").re
 import invoice_mail
 from addons import sync_opening_style
 from fastapi import Depends, HTTPException
-from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, ConfigDict, field_validator, model_validator
 
 # Latest client reply overrides the earlier 20% planning baseline.
 DEPOSIT_RATE = Decimal('0.60')
@@ -948,6 +948,32 @@ class InvoiceTemplate(Input):
 class SettingsEdit(Input):
     payment_details: PaymentDetails
     invoice_template: InvoiceTemplate | None = None
+
+
+class MailboxConnect(Input):
+    email: str = Field(min_length=3, max_length=200)
+    app_password: SecretStr = Field(min_length=1, max_length=300)
+
+
+class MailboxMessageAction(Input):
+    folder: str = Field(min_length=1, max_length=500)
+    uid: str = Field(min_length=1, max_length=30)
+
+
+class MailboxReadEdit(MailboxMessageAction):
+    read: bool
+
+
+class MailboxMove(MailboxMessageAction):
+    destination: str = Field(min_length=1, max_length=500)
+
+
+class MailboxSend(Input):
+    to: str = Field(min_length=3, max_length=2000)
+    cc: str = Field(default='', max_length=2000)
+    subject: str = Field(min_length=1, max_length=500)
+    body: str = Field(min_length=1, max_length=100000)
+    reply_to: str = Field(default='', max_length=500)
 
 
 class ManualItem(Input):
@@ -1951,6 +1977,171 @@ def register(app, s):
                 template = {**body.invoice_template.model_dump(), 'id': 'invoice-template', 'updated_at': s.now(), 'updated_by': actor}
                 put(c, 'setting', template)
             return {'payment_details': payment_view(saved), 'invoice_template': invoice_template(c)}
+
+    def mailbox_cipher():
+        from cryptography.fernet import Fernet
+        key = os.getenv('VERA_MAIL_ENCRYPTION_KEY', '').strip()
+        if not key:
+            raise HTTPException(503, 'Add VERA_MAIL_ENCRYPTION_KEY to the production environment before connecting a mailbox')
+        try:
+            return Fernet(key.encode('ascii'))
+        except (ValueError, UnicodeEncodeError):
+            raise HTTPException(503, 'VERA_MAIL_ENCRYPTION_KEY is invalid; use a Fernet key') from None
+
+    def saved_mailbox(c):
+        row = c.execute("SELECT data FROM operations_records WHERE id='mailbox-connection'").fetchone()
+        if not row:
+            raise HTTPException(409, 'Connect the Titan mailbox in Mail settings first')
+        saved = json.loads(row['data'])
+        try:
+            password = mailbox_cipher().decrypt(saved['encrypted_app_password'].encode('ascii')).decode('utf-8')
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, 'The saved mailbox credential cannot be decrypted. Reconnect the mailbox.') from None
+        return saved['email'], password
+
+    @app.get('/api/operations/mailbox')
+    def mailbox_status(actor=Depends(s.require_admin)):
+        with s.db() as c:
+            row = c.execute("SELECT data FROM operations_records WHERE id='mailbox-connection'").fetchone()
+        saved = json.loads(row['data']) if row else {}
+        key_configured = bool(os.getenv('VERA_MAIL_ENCRYPTION_KEY', '').strip())
+        credential_valid = False
+        if saved.get('encrypted_app_password') and key_configured:
+            try:
+                credential_valid = bool(mailbox_cipher().decrypt(saved['encrypted_app_password'].encode('ascii')))
+            except Exception:
+                credential_valid = False
+        return {'connected': credential_valid, 'credential_saved': bool(saved.get('encrypted_app_password')),
+                'credential_valid': credential_valid, 'email': saved.get('email', ''),
+                'provider': 'Titan', 'encryption_key_configured': key_configured,
+                'imap_host': 'imap.titan.email', 'imap_port': 993, 'smtp_host': 'smtp.titan.email', 'smtp_port': 465}
+
+    @app.post('/api/operations/mailbox/connect')
+    def connect_mailbox(body: MailboxConnect, actor=Depends(s.require_admin)):
+        from email_service import address
+        import mailbox_service
+        try:
+            email_address = address(body.email.strip()).lower()
+            password = body.app_password.get_secret_value()
+            cipher = mailbox_cipher()
+            mailbox_service.connect(email_address, password)
+        except HTTPException:
+            raise
+        except (ValueError, mailbox_service.MailboxError) as exc:
+            raise HTTPException(502, str(exc)) from None
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            saved = {'id': 'mailbox-connection', 'email': email_address,
+                     'encrypted_app_password': cipher.encrypt(password.encode('utf-8')).decode('ascii'),
+                     'provider': 'Titan', 'updated_at': s.now(), 'updated_by': actor}
+            put(c, 'setting', saved)
+        return {'connected': True, 'email': email_address, 'provider': 'Titan'}
+
+    @app.post('/api/operations/mailbox/disconnect')
+    def disconnect_mailbox(actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            c.execute("DELETE FROM operations_records WHERE id='mailbox-connection'")
+        return {'connected': False}
+
+    @app.get('/api/operations/mailbox/folders')
+    def mailbox_folders(actor=Depends(s.require_admin)):
+        import mailbox_service
+        with s.db() as c:
+            email_address, password = saved_mailbox(c)
+        try:
+            return mailbox_service.folders(email_address, password)
+        except mailbox_service.MailboxError as exc:
+            raise HTTPException(502, str(exc)) from None
+
+    @app.get('/api/operations/mailbox/messages')
+    def mailbox_messages(folder: str = 'INBOX', limit: int = 50, actor=Depends(s.require_admin)):
+        import mailbox_service
+        with s.db() as c:
+            email_address, password = saved_mailbox(c)
+        try:
+            return mailbox_service.list_messages(email_address, password, folder, limit)
+        except mailbox_service.MailboxError as exc:
+            raise HTTPException(502, str(exc)) from None
+
+    @app.get('/api/operations/mailbox/messages/{uid}')
+    def mailbox_message(uid: str, folder: str = 'INBOX', actor=Depends(s.require_admin)):
+        import mailbox_service
+        with s.db() as c:
+            email_address, password = saved_mailbox(c)
+        try:
+            return mailbox_service.get_message(email_address, password, folder, uid)
+        except mailbox_service.MailboxError as exc:
+            raise HTTPException(404, str(exc)) from None
+
+    @app.get('/api/operations/mailbox/messages/{uid}/attachments/{part}')
+    def mailbox_attachment(uid: str, part: int, folder: str = 'INBOX', actor=Depends(s.require_admin)):
+        from fastapi.responses import Response
+        from urllib.parse import quote
+        import mailbox_service
+        with s.db() as c:
+            email_address, password = saved_mailbox(c)
+        try:
+            item = mailbox_service.attachment(email_address, password, folder, uid, part)
+        except mailbox_service.MailboxError as exc:
+            raise HTTPException(404, str(exc)) from None
+        return Response(item['data'], media_type=item['content_type'],
+                        headers={'Content-Disposition': f"attachment; filename*=UTF-8''{quote(item['filename'])}", 'Cache-Control': 'private, no-store'})
+
+    @app.post('/api/operations/mailbox/read')
+    def mailbox_read(body: MailboxReadEdit, actor=Depends(s.require_admin)):
+        import mailbox_service
+        with s.db() as c:
+            email_address, password = saved_mailbox(c)
+        try:
+            mailbox_service.mark_read(email_address, password, body.folder, body.uid, body.read)
+            return {'updated': True}
+        except mailbox_service.MailboxError as exc:
+            raise HTTPException(502, str(exc)) from None
+
+    @app.post('/api/operations/mailbox/move')
+    def mailbox_move(body: MailboxMove, actor=Depends(s.require_admin)):
+        import mailbox_service
+        with s.db() as c:
+            email_address, password = saved_mailbox(c)
+        try:
+            mailbox_service.move_message(email_address, password, body.folder, body.uid, body.destination)
+            return {'moved': True}
+        except mailbox_service.MailboxError as exc:
+            raise HTTPException(502, str(exc)) from None
+
+    @app.post('/api/operations/mailbox/delete')
+    def mailbox_delete(body: MailboxMessageAction, actor=Depends(s.require_admin)):
+        import mailbox_service
+        with s.db() as c:
+            email_address, password = saved_mailbox(c)
+        try:
+            mailbox_service.delete_message(email_address, password, body.folder, body.uid)
+            return {'deleted': True}
+        except mailbox_service.MailboxError as exc:
+            raise HTTPException(502, str(exc)) from None
+
+    @app.post('/api/operations/mailbox/send')
+    def mailbox_send(body: MailboxSend, actor=Depends(s.require_admin)):
+        from email_service import address
+        import mailbox_service
+        try:
+            recipients = [address(item.strip()) for item in re.split(r'[,;]', body.to) if item.strip()]
+            carbon = [address(item.strip()) for item in re.split(r'[,;]', body.cc) if item.strip()]
+            if not recipients:
+                raise ValueError('Enter at least one recipient address')
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        with s.db() as c:
+            email_address, password = saved_mailbox(c)
+        try:
+            message_id = mailbox_service.send(email_address, password, ', '.join(recipients), body.subject.strip(),
+                                              body.body, ', '.join(carbon), body.reply_to)
+            return {'sent': True, 'message_id': message_id}
+        except mailbox_service.MailboxError as exc:
+            raise HTTPException(502, str(exc)) from None
 
     @app.post('/api/operations/customers')
     def create_customer(body: Profile, actor=Depends(s.require_admin)):
