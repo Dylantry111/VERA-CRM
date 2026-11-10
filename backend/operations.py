@@ -906,10 +906,16 @@ class RebateRuleEdit(Input):
     rate: Decimal = Field(gt=0, le=1, allow_inf_nan=False)
 
 
+class InvoiceCharge(Input):
+    description: str = Field(min_length=1, max_length=200)
+    amount: Decimal = Field(gt=0, allow_inf_nan=False, max_digits=12, decimal_places=2)
+
+
 class Settlement(Batch):
     rules_evidence: str = Field(min_length=5, max_length=1000)
     billing_basis: Literal['all_arrived_remaining_total']
     rebate_ids: list[str] = Field(default_factory=list, max_length=100)
+    additional_items: list[InvoiceCharge] = Field(default_factory=list, max_length=50)
 
     @field_validator('rebate_ids')
     @classmethod
@@ -930,8 +936,18 @@ class PaymentDetails(Input):
     reference_note: str = Field(default='', max_length=500)
 
 
+class InvoiceTemplate(Input):
+    company_name: str = Field(default='VERA Shading Solutions', max_length=200)
+    gst_number: str = Field(default='', max_length=80)
+    company_address: str = Field(default='', max_length=500)
+    footer: str = Field(default='', max_length=1000)
+    deposit_note: str = Field(default='Deposit of 60% of the order total. Amounts include GST.', max_length=500)
+    balance_note: str = Field(default='Balance of each order after the deposit already paid. Amounts include GST.', max_length=500)
+
+
 class SettingsEdit(Input):
     payment_details: PaymentDetails
+    invoice_template: InvoiceTemplate | None = None
 
 
 class ManualItem(Input):
@@ -1076,7 +1092,7 @@ def register(app, s):
             {**allocation, 'month': (get(c, allocation['rebate_id'], 'rebate').get('month') if allocation.get('rebate_id') else allocation.get('month'))}
             for allocation in inv.get('rebate_allocations', [])
         ]
-        return invoice_mail.build(email_invoice, profile(c, inv['customer_id']), orders, payment_details(c))
+        return invoice_mail.build(email_invoice, profile(c, inv['customer_id']), orders, inv.get('payment_details') or payment_details(c))
 
     def put(c, kind, d, cid=None):
         c.execute('INSERT INTO operations_records(id,kind,customer_id,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
@@ -1897,6 +1913,12 @@ def register(app, s):
         row = c.execute("SELECT data FROM operations_records WHERE id='payment-details'").fetchone()
         return json.loads(row['data']) if row else {}
 
+    def invoice_template(c):
+        row = c.execute("SELECT data FROM operations_records WHERE id='invoice-template'").fetchone()
+        saved = json.loads(row['data']) if row else {}
+        defaults = InvoiceTemplate().model_dump()
+        return {**defaults, **saved}
+
     def payment_view(details):
         view = {key: details.get(key, '') for key in PaymentDetails.model_fields}
         return {**view, 'configured': bool(invoice_mail.payment_lines(view))}
@@ -1906,8 +1928,9 @@ def register(app, s):
         from email_service import configuration
         with s.db() as c:
             payment = payment_view(payment_details(c))
+            template = invoice_template(c)
             max_length = order_number_max_length(c)
-        return {'email':configuration()[0],'storage':s.STORAGE_MODE,'database':s.BACKEND,'payment_details':payment,'order_number_max_length':max_length}
+        return {'email':configuration()[0],'storage':s.STORAGE_MODE,'database':s.BACKEND,'payment_details':payment,'invoice_template':template,'order_number_max_length':max_length}
 
     @app.post('/api/operations/settings/order-number-limit')
     def save_order_number_limit(body: OrderNumberLimitEdit, actor=Depends(s.require_admin)):
@@ -1924,7 +1947,10 @@ def register(app, s):
             c.execute('BEGIN IMMEDIATE')
             saved = {**body.payment_details.model_dump(), 'id': 'payment-details', 'updated_at': s.now(), 'updated_by': actor}
             put(c, 'setting', saved)
-            return {'payment_details': payment_view(saved)}
+            if body.invoice_template is not None:
+                template = {**body.invoice_template.model_dump(), 'id': 'invoice-template', 'updated_at': s.now(), 'updated_by': actor}
+                put(c, 'setting', template)
+            return {'payment_details': payment_view(saved), 'invoice_template': invoice_template(c)}
 
     @app.post('/api/operations/customers')
     def create_customer(body: Profile, actor=Depends(s.require_admin)):
@@ -2863,9 +2889,12 @@ def register(app, s):
             event(d, 'review_accepted', actor)
             inv = {'id': 'deposit:'+oid, 'customer_id': d['customer_id'], 'kind': 'deposit', 'order_ids': [oid],
                    'amount': d.get('deposit') or deposit_amount(d['total']), 'currency': d['currency'], 'tax_basis': d['tax_basis'],
+                   'tax_rate': d.get('tax_rate', '0.15'),
                    'deposit_rate': str(d.get('deposit_rate') or DEPOSIT_RATE), 'rounding': 'ROUND_UP_2DP',
                    'rule_source': 'Client reply 2026-10-15; In Put!P51',
-                   'status': 'draft', 'created_at': s.now(), 'actor': actor, 'lines': [{'order_id': oid, 'amount': d.get('deposit') or deposit_amount(d['total'])}]}
+                   'status': 'draft', 'created_at': s.now(), 'actor': actor,
+                   'template': invoice_template(c), 'payment_details': payment_view(payment_details(c)),
+                   'lines': [{'order_id': oid, 'amount': d.get('deposit') or deposit_amount(d['total'])}]}
             number_invoice(c, inv)
             put(c, 'invoice', inv, d['customer_id'])
             put(c, 'project', d, d['customer_id'])
@@ -3170,10 +3199,17 @@ def register(app, s):
                                 'received_at': inv.get('received_at') if paid else None,
                                 'orders': [{'id': oid, 'order_number': orders[oid].get('order_number') if orders[oid].get('order_number_confirmed', True) else None,
                                             'project_name': orders[oid].get('project_name')} for oid in inv['order_ids'] if oid in orders],
+                                'deposit_lines': ([{'order_number': orders[oid].get('order_number'), 'project_name': orders[oid].get('project_name'),
+                                                    'order_total': orders[oid].get('total'), 'deposit_due': inv.get('amount')}
+                                                   for oid in inv['order_ids'] if oid in orders] if inv.get('kind') == 'deposit' else []),
                                 'balance_lines': ([{'order_number': orders.get(line.get('order_id'), {}).get('order_number'),
                                                     'project_name': orders.get(line.get('order_id'), {}).get('project_name'),
                                                     'amount': line.get('amount', '0.00')}
                                                    for line in inv.get('lines', []) if inv.get('kind') == 'balance' and line.get('order_id') in orders]),
+                                'additional_lines': ([{'description': line.get('description', ''), 'amount': line.get('amount', '0.00')}
+                                                      for line in inv.get('lines', []) if inv.get('kind') == 'balance' and line.get('description')]),
+                                'gst_amount': money(invoice_mail.gst_included(Decimal(inv['amount']), inv.get('tax_rate') or next((o.get('tax_rate') for o in orders.values() if o.get('tax_rate')), '0.15'))),
+                                'gst_rate': str(inv.get('tax_rate') or next((o.get('tax_rate') for o in orders.values() if o.get('tax_rate')), '0.15')),
                                 'gross_amount': inv.get('gross') if inv.get('kind') == 'balance' else None,
                                 'rebate_allocations': ([{'month': credits.get(item.get('rebate_id'), {}).get('month', item.get('month')),
                                                          'amount': item.get('amount', '0.00')}
@@ -3232,13 +3268,15 @@ def register(app, s):
                                 'claimed': claim_status == 'claimed', 'claim_status': claim_status})
             return {'calculation_status': 'confirmed_monthly_rules_required', 'credits': credits}
 
-    def create_balance_invoice(c, orders, actor, iid, rules_evidence, request_hash, rebate_ids=None):
+    def create_balance_invoice(c, orders, actor, iid, rules_evidence, request_hash, rebate_ids=None, additional_items=None):
         """One draft balance invoice for arrived orders of one company, with only explicitly selected rebate credits."""
         cid, currency = orders[0]['customer_id'], orders[0]['currency']
         lines = []
         for d in orders:
             deposit = get(c, 'deposit:'+d['id'], 'invoice')
             lines.append({'order_id': d['id'], 'amount': money(Decimal(d['total'])-Decimal(deposit['amount']))})
+        for item in additional_items or []:
+            lines.append({'description': item.description, 'amount': money(item.amount), 'kind': 'additional_charge'})
         gross = sum((Decimal(l['amount']) for l in lines), Decimal(0))
         remaining, allocations = gross, []
         for rebate_id in (rebate_ids or []):
@@ -3257,8 +3295,9 @@ def register(app, s):
             remaining -= used
             allocations.append({'rebate_id': r['id'], 'month': r['month'], 'amount': money(used)})
         d = {'id': iid, 'customer_id': cid, 'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'lines': lines,
-             'currency': currency, 'tax_basis': orders[0]['tax_basis'], 'gross': money(gross), 'amount': money(remaining),
+             'currency': currency, 'tax_basis': orders[0]['tax_basis'], 'tax_rate': orders[0].get('tax_rate', '0.15'), 'gross': money(gross), 'amount': money(remaining),
              'rebate_allocations': allocations, 'status': 'draft', 'created_at': s.now(), 'actor': actor,
+             'template': invoice_template(c), 'payment_details': payment_view(payment_details(c)),
              'request_hash': request_hash, 'rules_evidence': rules_evidence}
         number_invoice(c, d)
         put(c, 'invoice', d, cid)
@@ -3289,7 +3328,7 @@ def register(app, s):
                     raise HTTPException(422, 'Selected rebates must belong to the invoiced customer and currency')
                 if rebate.get('month', '') >= s.business_now().strftime('%Y-%m') or Decimal(str(rebate.get('remaining', '0.00'))) <= 0:
                     raise HTTPException(409, 'Selected rebate is not currently available to claim')
-            return create_balance_invoice(c, orders, actor, iid, body.rules_evidence, bodyhash(body), body.rebate_ids)
+            return create_balance_invoice(c, orders, actor, iid, body.rules_evidence, bodyhash(body), body.rebate_ids, body.additional_items)
 
     @app.get('/api/portal/consumption')
     def consumption(cid=Depends(customer_auth)):

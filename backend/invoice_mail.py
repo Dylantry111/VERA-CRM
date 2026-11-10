@@ -6,6 +6,7 @@ the footer is configurable with VERA_INVOICE_FOOTER and otherwise only asks the 
 import io
 import os
 import re
+import base64
 from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 
@@ -70,10 +71,14 @@ def build(invoice, customer, orders, payment=None):
     kind = invoice.get('kind')
     deposit = kind == 'deposit'
     manual = kind == 'manual'
+    template = invoice.get('template') or {}
     currency = invoice.get('currency', 'NZD')
     rows = []
     for line in invoice.get('lines', []):
         amount = Decimal(line['amount'])
+        if line.get('description') and not line.get('order_id'):
+            rows.append({'order': '', 'project': line['description'], 'site': '', 'order_total': '', 'amount': money(amount)})
+            continue
         if manual:
             rows.append({'order': '', 'project': line.get('description', ''), 'site': '', 'order_total': '', 'amount': money(amount)})
             continue
@@ -95,6 +100,13 @@ def build(invoice, customer, orders, payment=None):
     ]
     rate = invoice.get('tax_rate') or next((o['tax_rate'] for o in orders.values() if o.get('tax_rate')), '0.15')
     bank = payment_lines(payment)
+    logo = ''
+    try:
+        logo_path = os.path.join(os.path.dirname(__file__), 'vera-logo.png')
+        with open(logo_path, 'rb') as image_file:
+            logo = 'data:image/png;base64,' + base64.b64encode(image_file.read()).decode('ascii')
+    except OSError:
+        pass
     model = {
         'number': number,
         'reference': reference,
@@ -105,6 +117,10 @@ def build(invoice, customer, orders, payment=None):
         'currency': currency,
         'tax_basis': str(invoice.get('tax_basis', '')).replace('_', ' '),
         'company': customer.get('company', ''),
+        'brand': template.get('company_name') or BRAND,
+        'brand_gst': template.get('gst_number', ''),
+        'brand_address': template.get('company_address', ''),
+        'logo': logo,
         'contact': customer.get('contact_name', ''),
         'address': customer.get('company_address', ''),
         'rows': rows,
@@ -114,11 +130,11 @@ def build(invoice, customer, orders, payment=None):
         'due': money(due),
         'gst': money(gst_included(due, rate)),
         'gst_rate': f"{Decimal(str(rate)) * 100:.0f}%",
-        'basis': (f"Deposit of {Decimal(invoice.get('deposit_rate', '0.6')) * 100:.0f}% of the order total." if deposit
+        'basis': (template.get('deposit_note') or f"Deposit of {Decimal(invoice.get('deposit_rate', '0.6')) * 100:.0f}% of the order total. Amounts include GST." if deposit
                   else 'Amounts include GST.' if manual
-                  else 'Balance of each order (GST included), after the deposit already paid and any confirmed rebate.'),
+                  else template.get('balance_note') or 'Balance of each order after the deposit already paid. Amounts include GST.'),
         'payment': bank,
-        'footer': (f'Please pay by bank transfer to the account above and quote {reference or number} as the reference.' if bank else footer()),
+        'footer': template.get('footer') or (f'Please pay by bank transfer to the account above and quote {reference or number} as the reference.' if bank else footer()),
     }
     model['subject'] = f"VERA invoice {number}"
     model['text'] = _text(model)
@@ -140,10 +156,14 @@ def _cells(m, r):
 
 
 def _text(m):
-    lines = [f"{BRAND}", f"{m['kind']} {m['number']}"] + ([f"Reference: {m['reference']}"] if m['reference'] else []) + [f"Date: {m['date']}", '',
+    lines = [m.get('brand') or BRAND, f"{m['kind']} {m['number']}"] + ([f"Reference: {m['reference']}"] if m['reference'] else []) + [f"Date: {m['date']}", '',
              f"Bill to: {m['company']}" + (f" ({m['contact']})" if m['contact'] else '')]
     if m['address']:
         lines.append(m['address'])
+    if m.get('brand_gst'):
+        lines.append(f"VERA GST No.: {m['brand_gst']}")
+    if m.get('brand_address'):
+        lines.append(m['brand_address'])
     lines.append('')
     labels = _columns(m)
     for r in m['rows']:
@@ -158,7 +178,7 @@ def _text(m):
             lines += [f"{item['label']}: -{m['currency']} {item['amount']}" for item in m['rebate_items']]
         else:
             lines.append(f"Rebate applied: -{m['currency']} {m['rebate']}")
-    lines += [f"Amount due: {m['currency']} {m['due']}", f"Includes GST ({m['gst_rate']}): {m['currency']} {m['gst']}", m['basis'], '']
+    lines += [f"Includes GST ({m['gst_rate']}): {m['currency']} {m['gst']}", f"Amount due (incl. GST): {m['currency']} {m['due']}", m['basis'], '']
     if m['payment']:
         lines += ['Payment details'] + [f"    {label}: {value}" for label, value in m['payment']] + ['']
     lines += [m['footer'], 'The PDF invoice is attached.']
@@ -193,10 +213,11 @@ def _html(m):
                + ''.join(f'<div style="font-size:13px;line-height:1.7;color:{ink}"><span style="color:#64766b">{e(label)}:</span> <strong>{e(value)}</strong></div>' for label, value in m['payment'])
                + '</td></tr>')
     reference = f'<div style="font-size:13px;opacity:.85;margin-top:2px">Reference: {e(m["reference"])}</div>' if m['reference'] else ''
+    logo = f'<img src="{m["logo"]}" alt="{e(m["brand"])}" style="display:block;max-width:220px;max-height:72px;margin:0 0 16px;background:#fff;border-radius:5px">' if m.get('logo') else ''
     return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:0;background:#f4f7f5;font-family:Segoe UI,Helvetica,Arial,sans-serif;color:{ink}">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f7f5;padding:24px 12px"><tr><td align="center">
 <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background:#ffffff;border-radius:14px;overflow:hidden;border:1px solid {line}">
-<tr><td style="background:{green};padding:26px 32px;color:#ffffff"><div style="font-size:12px;letter-spacing:.16em;opacity:.8">{e(BRAND.upper())}</div>
+<tr><td style="background:{green};padding:26px 32px;color:#ffffff">{logo}<div style="font-size:12px;letter-spacing:.16em;opacity:.8">{e(m['brand'].upper())}</div>{f'<div style="font-size:11px;opacity:.8">GST No. {e(m["brand_gst"])}</div>' if m.get('brand_gst') else ''}{f'<div style="font-size:11px;opacity:.8">{e(m["brand_address"])}</div>' if m.get('brand_address') else ''}
 <div style="font-size:24px;font-weight:700;margin-top:6px">{e(m["kind"])}</div><div style="font-size:14px;opacity:.9;margin-top:2px">{e(m["number"])}</div>{reference}</td></tr>
 <tr><td style="padding:28px 32px 8px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
 <td valign="top" style="font-size:13px;line-height:1.6"><div style="color:#64766b;font-size:11px;letter-spacing:.1em">BILL TO</div><strong>{e(m["company"])}</strong>{"<br>" + e(m["contact"]) if m["contact"] else ""}{"<br>" + e(m["address"]) if m["address"] else ""}</td>
@@ -205,7 +226,7 @@ def _html(m):
 <tr><td style="padding:8px 0;border-bottom:2px solid {ink};font-size:11px;letter-spacing:.08em;color:#64766b">ORDER</td>{th}</tr>
 {body}{extra}</table></td></tr>
 <tr><td style="padding:8px 32px 24px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef6f2;border-radius:10px"><tr>
-<td style="padding:16px 18px;font-size:13px;color:#34503f">Amount due<br><span style="font-size:11px;color:#64766b">{e(m["basis"])} Includes GST ({e(m["gst_rate"])}): {e(m["currency"])} {m["gst"]}.</span></td>
+<td style="padding:16px 18px;font-size:13px;color:#34503f">Includes GST ({e(m["gst_rate"])}): {e(m["currency"])} {m["gst"]}<br><span style="font-size:11px;color:#64766b">{e(m["basis"])}</span></td>
 <td align="right" style="padding:16px 18px;font-size:26px;font-weight:700;color:{green};white-space:nowrap">{e(m["currency"])} {m["due"]}</td></tr></table></td></tr>
 {pay}<tr><td style="padding:0 32px 28px;font-size:13px;line-height:1.7;color:#4d6256">{e(m["footer"])}<br><span style="color:#64766b">The PDF invoice is attached to this email.</span></td></tr>
 </table></td></tr></table></body></html>'''
@@ -243,7 +264,16 @@ def render_pdf(m):
     # reportlab frames add 6pt padding; subtract it so paragraphs and full-width tables share one left edge (174mm of content).
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm - 6, rightMargin=18 * mm - 6, topMargin=18 * mm, bottomMargin=18 * mm,
                             title=f"{m['kind']} {m['number']}", author=BRAND)
-    story = [P(BRAND.upper(), small), P(m['kind'], title), P(m['number'], base)]
+    story = []
+    if m.get('logo'):
+        from reportlab.platypus import Image
+        story.append(Image(io.BytesIO(base64.b64decode(m['logo'].split(',', 1)[1])), width=52 * mm, height=13 * mm, kind='proportional'))
+        story.append(Spacer(1, 3 * mm))
+    story += [P(m.get('brand') or BRAND, small), P(m['kind'], title), P(m['number'], base)]
+    if m.get('brand_gst'):
+        story.append(P('GST No. ' + m['brand_gst'], small))
+    if m.get('brand_address'):
+        story.append(P(m['brand_address'], small))
     if m['reference']:
         story.append(P('Reference: ' + m['reference'], base))
     story.append(Spacer(1, 8 * mm))
@@ -275,8 +305,8 @@ def render_pdf(m):
             totals += [[P(item['label'], base), P(f"-{m['currency']} {item['amount']}", right)] for item in m['rebate_items']]
         else:
             totals.append([P('Rebate applied', base), P(f"-{m['currency']} {m['rebate']}", right)])
-    totals.append([P('Amount due', bold), P(f"{m['currency']} {m['due']}", due_right)])
     totals.append([P(f"Includes GST ({m['gst_rate']})", small), P(f"{m['currency']} {m['gst']}", small_right)])
+    totals.append([P('Amount due (incl. GST)', bold), P(f"{m['currency']} {m['due']}", due_right)])
     t = Table(totals, colWidths=[134 * mm, 40 * mm])
     t.setStyle(TableStyle([('LINEABOVE', (0, -2), (-1, -2), 1, green), ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
                            ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
