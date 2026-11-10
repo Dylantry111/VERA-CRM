@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { portalRequest, portalSession } from "../../portal-api";
 import { describeConfiguredAddons, isTrackAddon, syncOpeningStyle, trackAddonsLocked, type Addon } from "../../addons";
-import { Copy, SlidersHorizontal, Trash2 } from "lucide-vue-next";
+import { Copy, Plus, SlidersHorizontal, Trash2 } from "lucide-vue-next";
 
 const { locale } = useI18n();
 const tx = (zh: string, en: string) => locale.value === "zh" ? zh : en;
@@ -26,6 +26,14 @@ const draft = reactive({ project_name: "", site_address: "", installation_requir
 const shutterProducts = computed(() => catalog.value.filter(p => p.category === "shutters" && p.orderable));
 const product = (id: number | "") => catalog.value.find(p => Number(p.id) === Number(id));
 function schemaFields(id: number | "") { return product(id)?.configuration_schema || []; }
+const BASE_REQUIRED_FIELDS = new Set(["window_name", "width_mm", "height_mm", "product_id"]);
+const CURRENT_PANEL_REQUIRED_CODES = new Set(["Shutters_PVC_Eco", "Shutters_PVC", "Shutters_Pinewood", "Shutters_Basswood", "VERA_Ashwood_provisional"]);
+function isRequired(window: any, key: string) {
+  if (BASE_REQUIRED_FIELDS.has(key)) return true;
+  const selected = product(window.product_id);
+  if (key === "panel_count") return selected?.required_fields ? selected.required_fields.includes(key) : CURRENT_PANEL_REQUIRED_CODES.has(selected?.source_code || "");
+  return schemaFields(window.product_id).some((field: any) => field.key === key && field.required === true);
+}
 function fieldsFor(window: any) { return schemaFields(window.product_id).filter((f: any) => !["colour", "louver_size", "fitting"].includes(f.key)); }
 function colorChoices(window: any) { return schemaFields(window.product_id).find((f: any) => f.key === "colour")?.choices || []; }
 function louverChoices(window: any) { return schemaFields(window.product_id).find((f: any) => f.key === "louver_size")?.choices || []; }
@@ -201,7 +209,7 @@ async function load() {
 
 function checkWindow(w: any, index: number) {
   if (!w.window_name.trim()) return tx(`第 ${index + 1} 行请填写窗户名称。`, `Row ${index + 1}: enter a window name.`);
-  if (!w.product_id || !(Number(w.width_mm) > 0) || !(Number(w.height_mm) > 0) || !(Number(w.panel_count) > 0)) return tx(`第 ${index + 1} 行的系列、宽、高和扇数都必须填写。`, `Row ${index + 1}: series, width, height and panels are required.`);
+  if (!w.product_id || !(Number(w.width_mm) > 0) || !(Number(w.height_mm) > 0) || (isRequired(w, "panel_count") && !(Number(w.panel_count) > 0))) return tx(`第 ${index + 1} 行的系列、宽、高${isRequired(w, "panel_count") ? "和扇数" : ""}都必须填写。`, `Row ${index + 1}: series, width, height${isRequired(w, "panel_count") ? " and panels" : ""} are required.`);
   for (const f of schemaFields(w.product_id)) {
     if (f.required && !w.options[f.key]) return tx(`第 ${index + 1} 行请填写${f.label_zh}。`, `Row ${index + 1}: ${f.label_en} is required.`);
     if (f.choices?.length && w.options[f.key] && !f.choices.includes(w.options[f.key])) return tx(`第 ${index + 1} 行的${f.label_zh}与所选系列不匹配。`, `Row ${index + 1}: ${f.label_en} is not valid for the selected series.`);
@@ -222,7 +230,7 @@ async function submit() {
       project_name: draft.project_name.trim(), site_address: draft.installation_required ? draft.site_address.trim() : "",
       installation_required: draft.installation_required, submission_key: crypto.randomUUID(),
       // Each spreadsheet row is one window; the customer template has no repeated-window quantity input.
-      lines: draft.windows.map(w => ({ window_name: w.window_name.trim(), product_id: Number(w.product_id), width_mm: w.width_mm, height_mm: w.height_mm, quantity: 1, panel_count: Number(w.panel_count), options: w.options })),
+      lines: draft.windows.map(w => ({ window_name: w.window_name.trim(), product_id: Number(w.product_id), width_mm: w.width_mm, height_mm: w.height_mm, quantity: 1, panel_count: Number(w.panel_count) || 1, options: w.options })),
     });
     localStorage.removeItem(draftKey.value);
     router.push(`/portal/orders/${saved.id}`);
@@ -242,33 +250,33 @@ load();
     <div v-if="loading" class="notice">{{ tx("正在加载产品…", "Loading products…") }}</div>
     <template v-else>
       <section class="order-fields">
-        <label>{{ tx("订单编号", "Order ID") }} *<input v-model="draft.project_name" maxlength="20" :placeholder="tx('最多 20 个字符', 'Up to 20 characters')" /><small class="field-hint">{{ draft.project_name.length }}/20 · {{ tx("请使用唯一编号", "Use a unique ID") }}</small></label>
-        <label v-if="draft.installation_required" class="address-field">{{ tx("施工地址", "Installation address") }} *<input v-model="draft.site_address" maxlength="1000" required /></label>
-        <label v-else class="address-field address-optional">{{ tx("施工地址", "Installation address") }} · {{ tx("仅安装时填写", "Only needed for installation") }}<input v-model="draft.site_address" maxlength="1000" :placeholder="tx('无需安装可留空', 'Leave blank for supply-only orders')" /></label>
+        <label class="order-id-field"><span class="field-label">{{ tx("订单编号", "Order ID") }}</span><input class="required-input" v-model="draft.project_name" maxlength="20" :placeholder="tx('最多 20 个字符', 'Up to 20 characters')" /><small class="field-hint">{{ draft.project_name.length }}/20 · {{ tx("请使用唯一编号", "Use a unique ID") }}</small></label>
+        <label v-if="draft.installation_required" class="address-field"><span class="field-label">{{ tx("施工地址", "Installation address") }}</span><input class="required-input" v-model="draft.site_address" maxlength="1000" required /><small class="field-hint">&nbsp;</small></label>
+        <label v-else class="address-field address-optional"><span class="field-label">{{ tx("施工地址", "Installation address") }} · {{ tx("仅安装时填写", "Only needed for installation") }}</span><input v-model="draft.site_address" maxlength="1000" :placeholder="tx('无需安装可留空', 'Leave blank for supply-only orders')" /><small class="field-hint">{{ tx("选择安装后，此项变为必填。", "Required when installation is selected.") }}</small></label>
         <label class="install-check"><input v-model="draft.installation_required" type="checkbox" />{{ tx("需要安装", "Installation required") }}</label>
       </section>
-      <div class="sheet-title"><div><h2>{{ tx("窗户明细", "Window Details") }}</h2><p>{{ tx("必填列标有 *。表格可横向滚动。", "Required fields are marked *. Scroll horizontally to see all columns.") }}</p></div><button type="button" class="add-row" @click="addWindow">＋ {{ tx("添加一行", "Add Row") }}</button></div>
+      <div class="sheet-title"><div><h2>{{ tx("窗户明细", "Window Details") }}</h2><p>{{ tx("高亮输入框为必填；选择产品系列后会按该产品自动调整。表格可横向滚动。", "Highlighted fields are required and update for the selected product. Scroll horizontally to see all columns.") }}</p></div></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th class="row-num">#</th><th>{{ tx("窗户位置 / 名称", "Window Location / Name") }} *</th><th>{{ tx("宽 (mm)", "Width (mm)") }} *</th><th>{{ tx("落差 (mm)", "DROP (mm)") }} *</th><th>{{ tx("材料 / 系列", "Material / Series") }} *</th><th>{{ tx("开合方式", "Opening Style") }}</th><th>{{ tx("扇数", "Panels") }} *</th><th>{{ tx("布局代码", "Layout Code") }}</th><th>{{ tx("竖柱", "VT Post") }}</th><th>{{ tx("横柱", "HT Post") }}</th><th>{{ tx("中横档", "Midrail") }}</th><th>{{ tx("框型", "Frame") }} *</th><th>{{ tx("叶片尺寸", "Louver Size") }} *</th><th>{{ tx("颜色", "Colour") }} *</th><th>{{ tx("控制杆", "Control Rod") }} *</th><th>{{ tx("安装尺寸", "Fitting") }} *</th><th>{{ tx("附加项 / 特殊要求", "Add-ons / Special Request") }}</th><th>{{ tx("操作", "Actions") }}</th><th class="price-col">{{ tx("行金额（含附加项）", "Line total (incl. add-ons)") }}</th></tr></thead>
+          <thead><tr><th class="row-num">#</th><th>{{ tx("窗户位置 / 名称", "Window Location / Name") }}</th><th>{{ tx("宽 (mm)", "Width (mm)") }}</th><th>{{ tx("落差 (mm)", "Drop (mm)") }}</th><th>{{ tx("材料 / 系列", "Material / Series") }}</th><th>{{ tx("开合方式", "Opening Style") }}</th><th>{{ tx("扇数", "Panels") }}</th><th>{{ tx("布局代码", "Layout Code") }}</th><th>{{ tx("竖柱", "VT Post") }}</th><th>{{ tx("横柱", "HT Post") }}</th><th>{{ tx("中横档", "Midrail") }}</th><th>{{ tx("框型", "Frame") }}</th><th>{{ tx("叶片尺寸", "Louver Size") }}</th><th>{{ tx("颜色", "Colour") }}</th><th>{{ tx("控制杆", "Control Rod") }}</th><th>{{ tx("安装尺寸", "Fitting") }}</th><th>{{ tx("附加项 / 特殊要求", "Add-ons / Special Request") }}</th><th>{{ tx("操作", "Actions") }}</th><th class="price-col">{{ tx("行金额（含附加项）", "Line total (incl. add-ons)") }}</th></tr></thead>
           <tbody>
             <tr v-for="(w,index) in draft.windows" :key="w.id">
               <td class="row-num">{{ index+1 }}</td>
-              <td><input v-model="w.window_name" :placeholder="tx('例如：Bedroom 1', 'e.g. Bedroom 1')" /></td>
-              <td><input v-model="w.width_mm" inputmode="decimal" /></td>
-              <td><input v-model="w.height_mm" inputmode="decimal" /></td>
-              <td><select v-model.number="w.product_id" @change="onSeriesChange(w)"><option value="">{{ tx("选择系列", "Select") }}</option><option v-for="p in shutterProducts" :key="p.id" :value="p.id">{{ productLabel(p) }}</option></select></td>
-              <td><select v-if="choicesFor(w,'opening_style').length" v-model="w.options.opening_style" @change="syncOpeningStyle(w.options)"><option v-for="v in choicesFor(w,'opening_style')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.opening_style" @change="syncOpeningStyle(w.options)" /></td>
-              <td><input v-model.number="w.panel_count" type="text" inputmode="numeric" /></td>
-              <td><input v-model="w.options.layout_code" /></td>
-              <td><input v-model="w.options.vt_post" /></td>
-              <td><input v-model="w.options.ht_post" /></td>
-              <td><input v-model="w.options.midrail" /></td>
-              <td><select v-if="choicesFor(w,'frame').length" v-model="w.options.frame"><option value="">—</option><option v-for="v in choicesFor(w,'frame')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.frame" /></td>
-              <td><select v-model="w.options.louver_size"><option value="">—</option><option v-for="v in louverChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
-              <td><select v-model="w.options.colour"><option value="">—</option><option v-for="v in colorChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
-              <td><select v-if="choicesFor(w,'control_rod').length" v-model="w.options.control_rod"><option value="">—</option><option v-for="v in choicesFor(w,'control_rod')" :key="v" :value="v">{{ v }}{{ rodPriceHint(v) }}</option></select><input v-else v-model="w.options.control_rod" /></td>
-              <td><select v-model="w.options.fitting"><option value="">—</option><option v-for="v in fittingChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
+              <td><input v-model="w.window_name" :class="{ 'required-input': isRequired(w,'window_name') }" :placeholder="tx('例如：Bedroom 1', 'e.g. Bedroom 1')" /></td>
+              <td><input v-model="w.width_mm" :class="{ 'required-input': isRequired(w,'width_mm') }" inputmode="decimal" /></td>
+              <td><input v-model="w.height_mm" :class="{ 'required-input': isRequired(w,'height_mm') }" inputmode="decimal" /></td>
+              <td><select v-model.number="w.product_id" :class="{ 'required-input': isRequired(w,'product_id') }" @change="onSeriesChange(w)"><option value="">{{ tx("选择系列", "Select") }}</option><option v-for="p in shutterProducts" :key="p.id" :value="p.id">{{ productLabel(p) }}</option></select></td>
+              <td><select v-if="choicesFor(w,'opening_style').length" v-model="w.options.opening_style" :class="{ 'required-input': isRequired(w,'opening_style') }" @change="syncOpeningStyle(w.options)"><option v-for="v in choicesFor(w,'opening_style')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.opening_style" :class="{ 'required-input': isRequired(w,'opening_style') }" @change="syncOpeningStyle(w.options)" /></td>
+              <td><input v-model.number="w.panel_count" :class="{ 'required-input': isRequired(w,'panel_count') }" type="text" inputmode="numeric" /></td>
+              <td><input v-model="w.options.layout_code" :class="{ 'required-input': isRequired(w,'layout_code') }" /></td>
+              <td><input v-model="w.options.vt_post" :class="{ 'required-input': isRequired(w,'vt_post') }" /></td>
+              <td><input v-model="w.options.ht_post" :class="{ 'required-input': isRequired(w,'ht_post') }" /></td>
+              <td><input v-model="w.options.midrail" :class="{ 'required-input': isRequired(w,'midrail') }" /></td>
+              <td><select v-if="choicesFor(w,'frame').length" v-model="w.options.frame" :class="{ 'required-input': isRequired(w,'frame') }"><option value="">—</option><option v-for="v in choicesFor(w,'frame')" :key="v" :value="v">{{ v }}</option></select><input v-else v-model="w.options.frame" :class="{ 'required-input': isRequired(w,'frame') }" /></td>
+              <td><select v-model="w.options.louver_size" :class="{ 'required-input': isRequired(w,'louver_size') }"><option value="">—</option><option v-for="v in louverChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
+              <td><select v-model="w.options.colour" :class="{ 'required-input': isRequired(w,'colour') }"><option value="">—</option><option v-for="v in colorChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
+              <td><select v-if="choicesFor(w,'control_rod').length" v-model="w.options.control_rod" :class="{ 'required-input': isRequired(w,'control_rod') }"><option value="">—</option><option v-for="v in choicesFor(w,'control_rod')" :key="v" :value="v">{{ v }}{{ rodPriceHint(v) }}</option></select><input v-else v-model="w.options.control_rod" :class="{ 'required-input': isRequired(w,'control_rod') }" /></td>
+              <td><select v-model="w.options.fitting" :class="{ 'required-input': isRequired(w,'fitting') }"><option value="">—</option><option v-for="v in fittingChoices(w)" :key="v" :value="v">{{ v }}</option></select></td>
               <td class="addons-cell">
                 <input class="special-request" v-model="w.options.special_request" :placeholder="tx('特殊要求 / 定制边框备注', 'Special request / custom frame notes')" />
                 <button type="button" class="addons-trigger" :title="describeConfiguredAddons(w.options, locale, availableAddons(w)).join(' · ') || undefined" @click="openAddons(w, index)"><SlidersHorizontal :size="14" aria-hidden="true" />{{ addonChips(w).length ? tx(`附加项 · ${addonChips(w).length}`, `Add-ons · ${addonChips(w).length}`) : tx('选择附加项', 'Choose add-ons') }}</button>
@@ -299,6 +307,7 @@ load();
           </form>
         </dialog>
       </div>
+      <div class="add-window-row-wrap"><button type="button" class="add-window-row" :aria-label="tx('添加一行','Add a row')" :title="tx('添加一行','Add a row')" @click="addWindow"><Plus :size="20" aria-hidden="true" /></button></div>
       <section class="price-summary" aria-live="polite">
         <div class="summary-status">
           <strong>{{ tx("价格预览", "Price preview") }}</strong>
@@ -331,4 +340,15 @@ load();
 @media(max-width:760px){.price-summary{position:static}.price-summary dl{gap:6px 16px}}
 .quote-total{padding:9px 11px;border-radius:5px;background:#edf5ef;color:#17523a;font-weight:650}.quote-error{font-size:12px;color:#8f3425}
 .table-wrap td:nth-child(3) input,.table-wrap td:nth-child(4) input{width:76px}.table-wrap td:nth-child(7) input{width:64px}.table-wrap td:nth-child(8) input,.table-wrap td:nth-child(9) input,.table-wrap td:nth-child(10) input,.table-wrap td:nth-child(11) input{width:72px}.field-hint{font-size:11px;color:#718078;font-weight:400}
+.order-fields{grid-template-columns:minmax(230px,.9fr) minmax(320px,1.6fr) auto;gap:18px}
+.order-fields label:not(.install-check){grid-template-rows:18px 40px 15px;align-content:start;gap:6px}
+.field-label{height:18px;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.install-check{align-self:end}
+.add-window-row-wrap{display:flex;justify-content:center;padding:12px 0 4px}
+.add-window-row{display:grid;place-items:center;width:42px;height:42px;min-height:42px;padding:0;border:1px solid #435a67;border-radius:50%!important;background:#354552;color:#fff;cursor:pointer;box-shadow:0 2px 7px rgba(40,52,58,.16)}
+.add-window-row:hover{background:#293b46;border-color:#293b46;transform:translateY(-1px)}
+.add-window-row:active{background:#1f303b;transform:translateY(0);box-shadow:inset 0 2px 4px rgba(0,0,0,.18)}
+.required-input{background:#e8eef0!important;border-color:#8a9ca5!important;box-shadow:inset 0 0 0 1px rgba(53,69,82,.08)}
+.required-input:focus{outline:2px solid #354552;outline-offset:1px}
+@media(max-width:760px){.order-fields{grid-template-columns:1fr}}
 </style>

@@ -247,11 +247,13 @@ button.primary:hover {
 .brand h2 { margin:0; font:600 20px var(--font-display); }
 .company-name { overflow:hidden; max-width:220px; color:rgba(27,36,33,.62); text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
 .portal-nav { display:flex; align-items:center; gap:4px; min-width:0; flex:1; }
-.nav-item { display:flex; align-items:center; justify-content:center; min-height:40px; padding:8px 12px; border-radius:6px; color:rgba(27,36,33,.72); text-decoration:none; white-space:nowrap; font-size:14px; }
-.nav-item:hover { background:rgba(15,110,92,.05); color:var(--ink); }
-.nav-item.active { color:var(--cord); background:rgba(15,110,92,.1); font-weight:650; }
-.logout-btn { flex:none; min-height:38px; padding:7px 12px; border:1px solid rgba(27,36,33,.25); border-radius:5px; background:transparent; color:rgba(27,36,33,.72); font-size:13px; cursor:pointer; }
-.logout-btn:hover { color:var(--cord); border-color:var(--cord); }
+.nav-item { display:flex; align-items:center; justify-content:center; min-height:40px; padding:8px 14px; border:1px solid transparent; border-radius:999px; color:rgba(40,52,58,.78); text-decoration:none; white-space:nowrap; font-size:14px; transition:color .16s ease,background-color .16s ease,border-color .16s ease,box-shadow .16s ease; }
+.nav-item:hover { background:#e8eef0; border-color:#c7d3d8; color:#28343a; }
+.nav-item:active { background:#dbe5e9; box-shadow:inset 0 2px 4px rgba(40,52,58,.12); }
+.nav-item.active { color:#fff; background:#354552; border-color:#354552; font-weight:650; }
+.logout-btn { flex:none; min-height:38px; padding:7px 14px; border:1px solid rgba(53,69,82,.32); border-radius:999px; background:transparent; color:rgba(40,52,58,.82); font-size:13px; cursor:pointer; }
+.logout-btn:hover { color:#28343a; background:#e8eef0; border-color:#435a67; }
+.logout-btn:active { background:#dbe5e9; box-shadow:inset 0 2px 4px rgba(40,52,58,.12); }
 
 .portal-content {
   padding: 24px 16px 100px;

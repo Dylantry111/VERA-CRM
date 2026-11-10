@@ -11,7 +11,6 @@ import OrdersList from "./views/portal/OrdersList.vue";
 import OrderDetail from "./views/portal/OrderDetail.vue";
 import Invoices from "./views/portal/Invoices.vue";
 import Company from "./views/portal/Company.vue";
-import Help from "./views/portal/Help.vue";
 import MyRebate from "./views/portal/MyRebate.vue";
 import TradeResourcesView from "./views/TradeResourcesView.vue";
 import TradeAccountView from "./views/TradeAccountView.vue";
@@ -39,7 +38,6 @@ export const router = createRouter({
         { path: "rebates", name: "rebates", component: MyRebate },
         { path: "profile", name: "profile", component: Company },
         { path: "company", redirect: "/portal/profile" },
-        { path: "help", name: "help", component: Help },
       ],
     },
     { path: "/about", name: "about", component: AboutView },
