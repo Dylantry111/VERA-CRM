@@ -421,7 +421,10 @@ const editProviderForm = reactive({
 });
 
 onMounted(() => {
-  void load().catch(cause=>{error.value=cause instanceof Error?cause.message:String(cause)}).finally(()=>{loaded.value=true});
+  void load().catch(cause=>{error.value=cause instanceof Error?cause.message:String(cause)}).finally(()=>{
+    loaded.value=true;
+    if(props.workspace==='finance' && route.query.balance_orders) void nextTick(()=>scrollFinanceStep('balance'));
+  });
 });
 
 function stableKey(signature: string) {
@@ -464,11 +467,23 @@ async function load() {
     };
     for (const order of shipment.orders || []) purchaseForm[order.id] = { usd: order.factory_price_usd || '', sqm: '' };
   }
-  if(props.workspace==='finance' && financeCustomer.value && !picked.value.length) {
-    const eligible=listed.filter(order=>String(order.customer_id)===financeCustomer.value &&
-      order.payment_status==='deposit_received' && order.lines.every((line) => line.arrived === line.quantity) &&
-      !billed.some(invoice=>invoice.kind==='balance' && invoice.order_ids?.includes(order.id)));
-    if(eligible.length===1) picked.value=[eligible[0].id];
+  if(props.workspace==='finance') {
+    const requested = String(route.query.balance_orders || '').split(',').filter(Boolean);
+    if (requested.length) {
+      const eligible = listed.filter(order => requested.includes(order.id) &&
+        String(order.customer_id) === financeCustomer.value && order.payment_status === 'deposit_received' &&
+        order.lines.length > 0 && order.lines.every(line => line.arrived === line.quantity) &&
+        !billed.some(invoice => invoice.kind === 'balance' && invoice.order_ids?.includes(order.id)));
+      picked.value = eligible.map(order => order.id);
+      if (eligible.length !== requested.length) {
+        error.value = tx('部分所选订单在打开尾款页面前已不符合开票条件；请检查订单状态。', 'Some selected orders no longer meet the balance-invoice requirements. Review their status before invoicing.');
+      }
+    } else if (financeCustomer.value && !picked.value.length) {
+      const eligible=listed.filter(order=>String(order.customer_id)===financeCustomer.value &&
+        order.payment_status==='deposit_received' && order.lines.length > 0 && order.lines.every((line) => line.arrived === line.quantity) &&
+        !billed.some(invoice=>invoice.kind==='balance' && invoice.order_ids?.includes(order.id)));
+      if(eligible.length===1) picked.value=[eligible[0].id];
+    }
   }
   for(const v of versions) applicability[v.id]=[...v.provider_ids];
   await refreshTemplate();
@@ -1062,6 +1077,24 @@ function settleSelected() {
     );
     picked.value=[];
     balanceRebatePick.value=[];
+  });
+}
+
+function openBalanceInvoiceForPicked() {
+  const rows = selectedOrders();
+  const customerId = oneCompany(rows);
+  if (customerId == null) return;
+  if (rows.some((order) => order.payment_status !== "deposit_received" || !order.lines.length || !allLinesArrived(order))) {
+    error.value = tx("尾款账单要求所选订单已收定金且所有货物均已到仓。", "Selected orders need a received deposit and every line fully arrived before a balance invoice can be created.");
+    return;
+  }
+  if (rows.some((order) => !!balanceInvoiceFor(order))) {
+    error.value = tx("所选订单中已有订单开过尾款账单。请移除这些订单后再继续。", "One or more selected orders already have a balance invoice. Remove them before continuing.");
+    return;
+  }
+  void router.push({
+    path: "/crm/finance",
+    query: { customer: String(customerId), balance_orders: rows.map((order) => order.id).join(",") },
   });
 }
 
@@ -1861,6 +1894,7 @@ async function loadOrderProviders(orderId: string) {
             <select v-model="bulkPaymentStatus" :disabled="!picked.length"><option value="">{{ tx('保持不变','Keep unchanged') }}</option><option v-for="status in editablePaymentStatuses" :key="status" :value="status">{{ orderStatus(status) }}</option></select>
           </label>
           <button type="button" :disabled="busy || !picked.length || (!bulkOrderStatus && !bulkPaymentStatus)" @click="applyBulkProgress">{{ tx('应用到所选订单','Apply to selected orders') }}</button>
+          <button type="button" class="secondary" :disabled="busy || !picked.length" @click="openBalanceInvoiceForPicked">{{ tx('生成尾款账单','Create balance invoice') }}</button>
         </div>
       </div>
       <div class="overview-scroll"><table class="orders-overview-table"><colgroup><col class="col-select"/><col class="col-order-id"/><col class="col-customer"/><col class="col-submitted"/><col class="col-status"/><col class="col-payment"/><col class="col-money"/><col class="col-date"/><col class="col-money"/><col class="col-date"/><col class="col-date"/><col class="col-date"/><col class="col-batch"/></colgroup><thead>
