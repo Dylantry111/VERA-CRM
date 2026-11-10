@@ -33,6 +33,14 @@
         {
           "source": "/contact",
           "destination": "/index.html"
+        },
+        {
+          "source": "/trade-resources",
+          "destination": "/index.html"
+        },
+        {
+          "source": "/trade-account",
+          "destination": "/index.html"
         }
       ]
     },
