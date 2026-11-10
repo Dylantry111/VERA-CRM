@@ -3,10 +3,9 @@ import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { request, session } from "../crm-api";
-import ProductManager from "../components/ProductManager.vue";
+import ProductWorkspace from "../components/ProductWorkspace.vue";
 import IntegrationStatus from "../components/IntegrationStatus.vue";
 import ProjectDesk from "../components/ProjectDesk.vue";
-import PricingKnowledge from "../components/PricingKnowledge.vue";
 import SampleDashboard from "../components/SampleDashboard.vue";
 import PortalCustomers from "../components/PortalCustomers.vue";
 import CrmGuide from "../components/CrmGuide.vue";
@@ -53,7 +52,6 @@ const nav = computed(() => [
   { key: "shipments", label: tx("Shipment", "Shipment") },
   { key: "customers", label: tx("Customer", "Customer"), badge: pendingTradeApplications.value },
   { key: "providers", label: tx("Supplier", "Supplier") },
-  { key: "pricing", label: tx("Price Knowledge", "Price Knowledge") },
   { key: "finance", label: tx("Accounts and Rebates", "Accounts and Rebates") },
   { key: "products", label: tx("Product", "Product") },
   { key: "help", label: tx("Operating Guide", "Operating Guide") },
@@ -187,7 +185,7 @@ onMounted(() => {
           <FolderKanban v-else-if="item.key==='projects'" :size="18" aria-hidden="true" />
           <Truck v-else-if="item.key==='shipments' || item.key==='providers'" :size="18" aria-hidden="true" />
           <Users v-else-if="item.key==='customers'" :size="18" aria-hidden="true" />
-          <BookOpen v-else-if="item.key==='pricing' || item.key==='help'" :size="18" aria-hidden="true" />
+          <BookOpen v-else-if="item.key==='help'" :size="18" aria-hidden="true" />
           <Wallet v-else-if="item.key==='finance'" :size="18" aria-hidden="true" />
           <Package v-else-if="item.key==='products'" :size="18" aria-hidden="true" />
           <Settings v-else-if="item.key==='users'" :size="18" aria-hidden="true" />
@@ -213,12 +211,11 @@ onMounted(() => {
         <label>{{ tx("再输入一次", "Repeat the new password") }}<input v-model="passwordForm.confirm" type="password" autocomplete="new-password" minlength="8" required /></label>
         <button :disabled="busy">{{ tx("保存密码", "Save password") }}</button>
       </form>
-      <PricingKnowledge v-if="tab === 'pricing'" :admin="me.role === 'admin'" />
       <ProjectDesk v-if="['projects','shipments','providers','finance'].includes(tab)" :key="tab" :workspace="tab" :email-enabled="emailEnabled" :email-mode="emailMode" :admin="me.role === 'admin'" />
       <CrmGuide v-if="tab==='help'" :demo="emailMode!=='live'" :delivery-enabled="emailEnabled" />
       <PortalCustomers v-if="tab === 'customers'" :admin="me.role === 'admin'" :email-enabled="emailEnabled" :email-mode="emailMode" @applications-updated="refreshTradeApplicationCount" />
       <SampleDashboard v-if="tab === 'dashboard'" />
-      <ProductManager v-if="tab === 'products'" :admin="me.role === 'admin'" @updated="act(load)" />
+      <ProductWorkspace v-if="tab === 'products'" :admin="me.role === 'admin'" @updated="act(load)" />
       <div v-if="tab === 'users' && me.role === 'admin'" class="settings-layout">
         <IntegrationStatus :locale="locale" />
         <section class="card">

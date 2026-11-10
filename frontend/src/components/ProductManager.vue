@@ -4,13 +4,14 @@ import {useI18n} from 'vue-i18n';
 import {request} from '../crm-api';
 import ProductPicture from './ProductPicture.vue';
 import {materialPhoto,type ApiProduct} from '../api';
-const props=defineProps<{admin:boolean}>();const emit=defineEmits<{updated:[]}>();
+const props=defineProps<{admin:boolean}>();const emit=defineEmits<{updated:[];pricing:[code:string]}>();
 const {locale}=useI18n();const tx=(z:string,e:string)=>locale.value==='zh'?z:e;
 type Product=ApiProduct&{published:boolean;image_url:string;image_urls:string[];unit:string;width_min:number|null;width_max:number|null;height_min:number|null;height_max:number|null;colors:string[];controls:string[]};
 const products=ref<Product[]>([]),query=ref(''),chosen=ref<number|null>(null),busy=ref(false),error=ref(''),notice=ref(''),adding=ref(false);
 const blank=()=>({name_zh:'',name_en:'',material_zh:'',material_en:'',description_zh:'',description_en:'',category:'aluminium',image_url:'',image_urls:[] as string[],sample:true,published:false,unit:'mm',width_min:null as number|null,width_max:null as number|null,height_min:null as number|null,height_max:null as number|null});
 const form=reactive(blank()),colors=ref(''),controls=ref(''),maxImageBytes=ref(5*1024*1024);
 const filtered=computed(()=>products.value.filter(p=>[p.name_en,p.name_zh,p.category].join(' ').toLowerCase().includes(query.value.toLowerCase())));
+const chosenProduct=computed(()=>products.value.find(p=>p.id===chosen.value));
 const previewIndex=ref(0);
 const preview=computed(()=>form.image_urls[previewIndex.value]||form.image_urls[0]||form.image_url||'');
 function cover(index:number){const [url]=form.image_urls.splice(index,1);form.image_urls.unshift(url);form.image_url=url;previewIndex.value=0}
@@ -81,7 +82,7 @@ onBeforeUnmount(()=>window.removeEventListener('keydown',onKey));
       <div class="pm-pair"><label>{{tx('可选颜色 · 用逗号分隔','Colour options · separate with commas')}}<input v-model="colors" :readonly="!admin"/></label><label>{{tx('控制方式 · 用逗号分隔','Controls · separate with commas')}}<input v-model="controls" :readonly="!admin"/></label></div>
       <p class="pm-hint">{{tx('范围可留空，实际项目规格与单价在报价中确认。修改目录不改变历史报价和订单。','Ranges may be left blank. Confirm project specifications and pricing in the quote. Catalogue changes do not alter past quotes or orders.')}}</p>
     </section>
-    <footer class="pm-save"><button v-if="admin" type="submit" class="pm-primary" :disabled="busy">{{busy?tx('保存中…','Saving…'):tx('保存产品','Save product')}}</button><button type="button" class="pm-ghost" @click="close" :disabled="busy">{{admin?tx('取消','Cancel'):tx('关闭','Close')}}</button><span v-if="admin">{{form.published?tx('保存后供官网展示','Will be visible on the website'):tx('保存为未展示产品','Will remain hidden from the website')}}</span></footer>
+  <footer class="pm-save"><button v-if="admin && chosenProduct?.source_code" type="button" class="pm-ghost" @click="emit('pricing',chosenProduct.source_code!)">{{tx('编辑价格与计算','Edit pricing & calculation')}}</button><button v-if="admin" type="submit" class="pm-primary" :disabled="busy">{{busy?tx('保存中…','Saving…'):tx('保存产品','Save product')}}</button><button type="button" class="pm-ghost" @click="close" :disabled="busy">{{admin?tx('取消','Cancel'):tx('关闭','Close')}}</button><span v-if="admin">{{form.published?tx('保存后供官网展示','Will be visible on the website'):tx('保存为未展示产品','Will remain hidden from the website')}}</span></footer>
   </form>
 </aside>
 </div>

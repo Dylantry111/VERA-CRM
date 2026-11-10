@@ -10,6 +10,7 @@ export type ApiProduct = {
   colors?: string[];
   controls?: string[];
   id: number;
+  source_code?: string;
   name_zh: string;
   name_en: string;
   material_zh: string;
