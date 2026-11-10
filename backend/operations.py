@@ -582,6 +582,35 @@ class TradeProductInterest(Input):
     monthly_sqm: Decimal = Field(gt=0, le=100000, allow_inf_nan=False)
 
 
+class PortalProfileEdit(Input):
+    company: str | None = Field(default=None, min_length=2, max_length=200)
+    contact_name: str | None = Field(default=None, min_length=2, max_length=200)
+    email: str | None = Field(default=None, min_length=3, max_length=200)
+    phone: str | None = Field(default=None, min_length=5, max_length=100)
+    company_address: str | None = Field(default=None, min_length=5, max_length=1000)
+    nzbn: str | None = Field(default=None, pattern=r'^\d{13}$')
+    finance_email: str | None = Field(default=None, max_length=200)
+    finance_phone: str | None = Field(default=None, max_length=100)
+    product_interests: list[TradeProductInterest] | None = Field(default=None, max_length=20)
+    application_notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator('email', 'finance_email')
+    @classmethod
+    def valid_profile_emails(cls, value):
+        if value is None or not value.strip():
+            return None
+        from email_service import address
+        return address(value)
+
+    @model_validator(mode='after')
+    def unique_profile_interests(self):
+        if self.product_interests is not None:
+            ids = [item.product_id for item in self.product_interests]
+            if len(ids) != len(set(ids)):
+                raise ValueError('Choose each product series only once')
+        return self
+
+
 class TradeApplication(Input):
     company_name: str = Field(min_length=2, max_length=200)
     nzbn: str = Field(pattern=r'^\d{13}$')
@@ -874,6 +903,14 @@ class RebateRuleEdit(Input):
 class Settlement(Batch):
     rules_evidence: str = Field(min_length=5, max_length=1000)
     billing_basis: Literal['all_arrived_remaining_total']
+    rebate_ids: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator('rebate_ids')
+    @classmethod
+    def unique_rebate_ids(cls, value):
+        if len(value) != len(set(value)):
+            raise ValueError('A rebate can only be selected once')
+        return value
 
 
 class Receipt(Input):
@@ -1028,7 +1065,12 @@ def register(app, s):
         # One builder for the stored invoice: used by preview, queueing, delivery and the PDF download.
         inv = get(c, iid, 'invoice')
         orders = {oid: get(c, oid, 'project') for oid in inv['order_ids']}
-        return invoice_mail.build(inv, profile(c, inv['customer_id']), orders, payment_details(c))
+        email_invoice = dict(inv)
+        email_invoice['rebate_allocations'] = [
+            {**allocation, 'month': (get(c, allocation['rebate_id'], 'rebate').get('month') if allocation.get('rebate_id') else allocation.get('month'))}
+            for allocation in inv.get('rebate_allocations', [])
+        ]
+        return invoice_mail.build(email_invoice, profile(c, inv['customer_id']), orders, payment_details(c))
 
     def put(c, kind, d, cid=None):
         c.execute('INSERT INTO operations_records(id,kind,customer_id,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
@@ -1686,6 +1728,53 @@ def register(app, s):
     def me(cid=Depends(customer_auth)):
         with s.db() as c:
             return profile(c, cid)
+
+    @app.post('/api/portal/me')
+    def edit_portal_me(body: PortalProfileEdit, cid=Depends(customer_auth)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row = c.execute('SELECT username, data FROM portal_profiles WHERE customer_id=?', (cid,)).fetchone()
+            if not row:
+                raise HTTPException(404, 'Portal account not found')
+            current = json.loads(row['data'])
+            updates = body.model_dump(exclude_unset=True, mode='json')
+            if not updates:
+                return current
+
+            company = updates.get('company', current.get('company', ''))
+            if 'company' in updates:
+                existing = [r['company'] for r in c.execute('SELECT company FROM customers WHERE id<>?', (cid,)).fetchall()]
+                if any(name.strip().casefold() == company.strip().casefold() for name in existing):
+                    raise HTTPException(409, 'A company with this name already has an account')
+                c.execute('UPDATE customers SET company=? WHERE id=?', (company, cid))
+
+            login_name = row['username']
+            if 'email' in updates:
+                if not updates['email']:
+                    raise HTTPException(422, 'A primary contact email is required')
+                login_name = updates['email'].strip().lower()
+                conflict = c.execute('SELECT 1 FROM portal_profiles WHERE lower(username)=lower(?) AND customer_id<>?', (login_name, cid)).fetchone()
+                if conflict:
+                    raise HTTPException(409, 'This email is already used for another trade login')
+                current['email'] = login_name
+                current['username'] = login_name
+                c.execute('UPDATE portal_profiles SET username=? WHERE customer_id=?', (login_name, cid))
+
+            if 'product_interests' in updates:
+                products = {json.loads(r['data'])['id']: json.loads(r['data']) for r in c.execute('SELECT data FROM products')}
+                selected = []
+                for interest in updates['product_interests'] or []:
+                    product = products.get(interest['product_id'])
+                    if not product or not product.get('published', True) or product.get('source_code') not in WEBSITE_IMAGES:
+                        raise HTTPException(422, 'Choose a currently available VERA trade product')
+                    selected.append({'product_id': product['id'], 'name': product.get('name_en', ''),
+                                     'material': product.get('material_en', ''), 'monthly_sqm': str(interest['monthly_sqm'])})
+                updates['product_interests'] = selected
+
+            current.update(updates, updated_at=s.now())
+            current['username'] = login_name
+            c.execute('UPDATE portal_profiles SET data=? WHERE customer_id=?', (s.dump(current), cid))
+            return current
 
     @app.post('/api/portal/password')
     def update_portal_password(body: PortalPasswordUpdate, cid=Depends(customer_auth), credentials=Depends(s.security)):
@@ -2568,6 +2657,8 @@ def register(app, s):
         with s.db() as c:
             rules = active_rebate_rules(c)
             orders = records(c, 'project', cid)
+            credits = records(c, 'rebate', cid)
+            invoices = {invoice['id']: invoice for invoice in records(c, 'invoice', cid)}
             groups = {}
             for d in orders:
                 paid = d.get('deposit_paid_at')
@@ -2600,6 +2691,32 @@ def register(app, s):
                 entry['product_total'] = money(entry['product_total'])
                 entry['rebate'] = money(entry['rebate'])
                 entry['orders'].sort(key=lambda order: order['order_date'])
+                month_credits = [credit for credit in credits if credit.get('month') == month and credit.get('currency') == entry['currency']]
+                claim_records = []
+                for credit in month_credits:
+                    allocations = []
+                    for allocation in credit.get('allocations', []):
+                        invoice = invoices.get(allocation.get('invoice_id'))
+                        if invoice:
+                            allocations.append({'invoice_id': invoice['id'], 'invoice_number': invoice.get('invoice_number'),
+                                                'invoice_status': invoice.get('status'), 'amount': allocation.get('amount', '0.00')})
+                    remaining = Decimal(str(credit.get('remaining', '0.00')))
+                    used = Decimal(str(credit.get('used', '0.00')))
+                    state = 'partially_claimed' if used > 0 and remaining > 0 else 'claimed' if used > 0 and remaining == 0 else 'unclaimed'
+                    claim_records.append({'amount': credit['amount'], 'used': money(used), 'remaining': money(remaining),
+                                          'claimed': state == 'claimed', 'claim_status': state,
+                                          'allocations': allocations})
+                entry['rebate_credits'] = claim_records
+                if not claim_records:
+                    entry['claim_status'] = 'awaiting_confirmation' if Decimal(entry['rebate']) > 0 else 'not_earned'
+                elif any(Decimal(item['used']) > 0 and Decimal(item['remaining']) > 0 for item in claim_records) or (
+                    any(Decimal(item['used']) > 0 for item in claim_records) and any(Decimal(item['remaining']) > 0 for item in claim_records)
+                ):
+                    entry['claim_status'] = 'partially_claimed'
+                elif all(Decimal(item['remaining']) == 0 for item in claim_records):
+                    entry['claim_status'] = 'claimed'
+                else:
+                    entry['claim_status'] = 'unclaimed'
                 result.append(entry)
             return {'months': result, 'rules': rules}
 
@@ -3036,6 +3153,7 @@ def register(app, s):
         """The customer's own invoices once VERA has sent them, with paid/unpaid state and a count of what is still owing."""
         with s.db() as c:
             orders = {d['id']: d for d in records(c, 'project', cid)}
+            credits = {d['id']: d for d in records(c, 'rebate', cid)}
             visible = []
             for inv in sorted(records(c, 'invoice', cid), key=lambda x: x.get('created_at', ''), reverse=True):
                 if inv.get('status') == 'draft':
@@ -3046,6 +3164,14 @@ def register(app, s):
                                 'received_at': inv.get('received_at') if paid else None,
                                 'orders': [{'id': oid, 'order_number': orders[oid].get('order_number') if orders[oid].get('order_number_confirmed', True) else None,
                                             'project_name': orders[oid].get('project_name')} for oid in inv['order_ids'] if oid in orders],
+                                'balance_lines': ([{'order_number': orders.get(line.get('order_id'), {}).get('order_number'),
+                                                    'project_name': orders.get(line.get('order_id'), {}).get('project_name'),
+                                                    'amount': line.get('amount', '0.00')}
+                                                   for line in inv.get('lines', []) if inv.get('kind') == 'balance' and line.get('order_id') in orders]),
+                                'gross_amount': inv.get('gross') if inv.get('kind') == 'balance' else None,
+                                'rebate_allocations': ([{'month': credits.get(item.get('rebate_id'), {}).get('month', item.get('month')),
+                                                         'amount': item.get('amount', '0.00')}
+                                                        for item in inv.get('rebate_allocations', [])] if inv.get('kind') == 'balance' else []),
                                 'lines': inv.get('lines') if inv['kind'] == 'manual' else None,
                                 'pdf_path': f"portal/invoices/{inv['id']}/pdf"})
             return {'invoices': visible, 'unpaid_count': sum(i['payment_status'] == 'unpaid' for i in visible),
@@ -3090,10 +3216,18 @@ def register(app, s):
     @app.get('/api/operations/rebates')
     def rebates(actor=Depends(s.auth)):
         with s.db() as c:
-            return {'calculation_status': 'confirmed_monthly_rules_required', 'credits': records(c, 'rebate')}
+            current_month = s.business_now().strftime('%Y-%m')
+            credits = []
+            for rebate in records(c, 'rebate'):
+                remaining = Decimal(str(rebate.get('remaining', '0.00')))
+                used = Decimal(str(rebate.get('used', '0.00')))
+                claim_status = 'partially_claimed' if used > 0 and remaining > 0 else 'claimed' if used > 0 and remaining == 0 else 'unclaimed'
+                credits.append({**rebate, 'claimable': remaining > 0 and rebate.get('month', '') < current_month,
+                                'claimed': claim_status == 'claimed', 'claim_status': claim_status})
+            return {'calculation_status': 'confirmed_monthly_rules_required', 'credits': credits}
 
-    def create_balance_invoice(c, orders, actor, iid, rules_evidence, request_hash):
-        """One draft balance invoice for the given arrived orders of one company: order total less deposit, then confirmed earlier-month rebates."""
+    def create_balance_invoice(c, orders, actor, iid, rules_evidence, request_hash, rebate_ids=None):
+        """One draft balance invoice for arrived orders of one company, with only explicitly selected rebate credits."""
         cid, currency = orders[0]['customer_id'], orders[0]['currency']
         lines = []
         for d in orders:
@@ -3101,19 +3235,21 @@ def register(app, s):
             lines.append({'order_id': d['id'], 'amount': money(Decimal(d['total'])-Decimal(deposit['amount']))})
         gross = sum((Decimal(l['amount']) for l in lines), Decimal(0))
         remaining, allocations = gross, []
-        for r in sorted(records(c, 'rebate', cid), key=lambda x: (x['month'], x['id'])):
-            # Use only next-period confirmed credits; never use this month's credit early.
-            if r['currency'] != currency or r['month'] >= s.business_now().strftime('%Y-%m'):
-                continue
+        for rebate_id in (rebate_ids or []):
+            r = get(c, rebate_id, 'rebate')
+            if r['customer_id'] != cid or r['currency'] != currency:
+                raise HTTPException(422, 'Selected rebates must belong to the invoiced customer and currency')
+            if r['month'] >= s.business_now().strftime('%Y-%m') or Decimal(str(r.get('remaining', '0.00'))) <= 0:
+                raise HTTPException(409, 'Selected rebate is not currently available to claim')
             used = min(remaining, Decimal(r['remaining']))
             if used <= 0:
                 continue
             r['remaining'] = money(Decimal(r['remaining'])-used)
             r['used'] = money(Decimal(r['used'])+used)
-            r['allocations'].append({'invoice_id': iid, 'amount': money(used)})
+            r.setdefault('allocations', []).append({'invoice_id': iid, 'amount': money(used), 'claimed_at': s.now()})
             put(c, 'rebate', r, cid)
             remaining -= used
-            allocations.append({'rebate_id': r['id'], 'amount': money(used)})
+            allocations.append({'rebate_id': r['id'], 'month': r['month'], 'amount': money(used)})
         d = {'id': iid, 'customer_id': cid, 'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'lines': lines,
              'currency': currency, 'tax_basis': orders[0]['tax_basis'], 'gross': money(gross), 'amount': money(remaining),
              'rebate_allocations': allocations, 'status': 'draft', 'created_at': s.now(), 'actor': actor,
@@ -3141,7 +3277,13 @@ def register(app, s):
                 raise HTTPException(409, 'Balance invoices are available only after every line has arrived and the deposit is confirmed')
             if any(d.get('balance_invoice_id') for d in orders):
                 raise HTTPException(409, 'An order already has a balance invoice')
-            return create_balance_invoice(c, orders, actor, iid, body.rules_evidence, bodyhash(body))
+            for rebate_id in body.rebate_ids:
+                rebate = get(c, rebate_id, 'rebate')
+                if rebate['customer_id'] != orders[0]['customer_id'] or rebate['currency'] != orders[0]['currency']:
+                    raise HTTPException(422, 'Selected rebates must belong to the invoiced customer and currency')
+                if rebate.get('month', '') >= s.business_now().strftime('%Y-%m') or Decimal(str(rebate.get('remaining', '0.00'))) <= 0:
+                    raise HTTPException(409, 'Selected rebate is not currently available to claim')
+            return create_balance_invoice(c, orders, actor, iid, body.rules_evidence, bodyhash(body), body.rebate_ids)
 
     @app.get('/api/portal/consumption')
     def consumption(cid=Depends(customer_auth)):

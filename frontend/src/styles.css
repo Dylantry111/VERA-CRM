@@ -34,6 +34,7 @@ a { color: inherit; text-decoration: none; min-height: 44px; display: inline-fle
 button, .button {
   min-height: 44px;
   border: 1px solid var(--cord);
+  border-radius: 999px !important;
   background: var(--cord);
   color: var(--paper);
   padding: 10px 20px;

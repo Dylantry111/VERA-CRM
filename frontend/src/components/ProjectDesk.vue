@@ -71,6 +71,7 @@ interface Rebate {
   currency: string;
   used?: string;
   remaining?: string;
+  claimable?: boolean;
   evidence?: string;
 }
 interface Provider {
@@ -231,6 +232,29 @@ const shipmentCosts = reactive<Record<string, { freight_land: string; freight_se
 const purchaseForm = reactive<Record<string, { usd: string; sqm: string }>>({});
 const notices = ref<Notice[]>([]);
 const rebates = ref<Rebate[]>([]);
+const balanceRebatePick = ref<string[]>([]);
+const balanceSelectedOrders = computed(() => orders.value.filter((order) => balancePicked.value.includes(order.id)));
+const balanceRebates = computed(() => {
+  const rows = balanceSelectedOrders.value;
+  if (!rows.length || new Set(rows.map((order) => order.customer_id)).size !== 1 || new Set(rows.map((order) => order.currency)).size !== 1) return [];
+  return rebates.value.filter((rebate) => rebate.claimable && rebate.customer_id === rows[0].customer_id && rebate.currency === rows[0].currency);
+});
+const balancePreview = computed(() => {
+  const rows = balanceSelectedOrders.value;
+  const currency = rows[0]?.currency || 'NZD';
+  const grossCents = rows.reduce((sum, order) => {
+    const deposit = order.deposit ?? depositInvoiceFor(order)?.amount ?? '0';
+    return sum + Math.max(0, Math.round((Number(order.total || 0) - Number(deposit || 0)) * 100));
+  }, 0);
+  let rebateCents = 0;
+  for (const id of balanceRebatePick.value) {
+    const credit = balanceRebates.value.find((item) => item.id === id);
+    if (!credit) continue;
+    const amount = Math.max(0, Math.round(Number(credit.remaining || 0) * 100));
+    rebateCents += Math.max(0, Math.min(grossCents - rebateCents, amount));
+  }
+  return { currency, gross: (grossCents / 100).toFixed(2), rebate: (rebateCents / 100).toFixed(2), due: ((grossCents - rebateCents) / 100).toFixed(2) };
+});
 const providers = ref<Provider[]>([]);
 const providerTemplates = ref<ProviderTemplate[]>([]);
 const rebateStatus = ref("");
@@ -997,8 +1021,8 @@ function autoEvidence(rows: ProjectOrder[]) {
   });
   const more = rows.length > AUTO_EVIDENCE_MAX_ORDERS ? tx(`；另有 ${rows.length - AUTO_EVIDENCE_MAX_ORDERS} 单`, `; ${rows.length - AUTO_EVIDENCE_MAX_ORDERS} more orders`) : "";
   return tx(
-    `按系统记录生成：每一行都已到货且定金已收的订单，应收尾款=订单总额-已保存定金。${parts.join("；")}${more}。仅扣除早于本月、已确认的返利余额；不自动计算返利。`,
-    `Generated from system records: orders with every line arrived and the deposit received; balance = order total minus the stored deposit. ${parts.join("; ")}${more}. Only confirmed rebate balances from earlier months are deducted; no rebate is calculated automatically.`,
+    `按系统记录生成：每一行都已到货且定金已收的订单，应收尾款=订单总额-已保存定金。${parts.join("；")}${more}。仅扣除本次明确选择的、早于本月的已确认返利。`,
+    `Generated from system records: orders with every line arrived and the deposit received; balance = order total minus the stored deposit. ${parts.join("; ")}${more}. Only rebates explicitly selected for this invoice are deducted.`,
   );
 }
 let lastAutoEvidence = "";
@@ -1021,20 +1045,23 @@ function settleSelected() {
     return;
   }
   const orderIds = rows.map((order) => order.id).sort();
+  const rebateIds = balanceRebatePick.value.filter((id) => balanceRebates.value.some((rebate) => rebate.id === id)).sort();
   const body = {
     order_ids: orderIds,
-    operation_key: stableKey(JSON.stringify({ settle: orderIds, evidence: settlementEvidence.value.trim() })),
+    rebate_ids: rebateIds,
+    operation_key: stableKey(JSON.stringify({ settle: orderIds, rebates: rebateIds, evidence: settlementEvidence.value.trim() })),
     rules_evidence: settlementEvidence.value.trim(),
     billing_basis: "all_arrived_remaining_total" as const,
   };
   return act(async () => {
     const invoice = await request<Invoice>("operations/settlements", body);
-    operationKeys.delete(JSON.stringify({ settle: orderIds, evidence: settlementEvidence.value.trim() }));
+    operationKeys.delete(JSON.stringify({ settle: orderIds, rebates: rebateIds, evidence: settlementEvidence.value.trim() }));
     notice.value = tx(
       `已生成尾款草稿 ${invoiceLabel(invoice)}，金额 ${invoice.currency} ${invoice.amount}。部分到货或未收定金会被拒绝。发送仍是另一步。`,
       `Balance draft ${invoiceLabel(invoice)} created for ${invoice.currency} ${invoice.amount}. Partial arrival or an unpaid deposit is refused. Sending stays a separate step.`,
     );
     picked.value=[];
+    balanceRebatePick.value=[];
   });
 }
 
@@ -1683,7 +1710,7 @@ async function loadOrderProviders(orderId: string) {
             <ManualInvoiceForm v-if="admin" :customers="customers" :locale="locale" @created="load" />
             <header class="finance-header">
               <div><h2>{{ tx('账款与返利','Accounts & rebates') }}</h2><p class="fin-sub">{{ financeTodoTotal ? tx(`还有 ${financeTodoTotal} 件事要处理，按 1 → 4 的顺序做。`, `${financeTodoTotal} items need action. Work through steps 1 → 4.`) : tx('没有待处理的账款，全部处理完了。', 'Nothing to do. All accounts are up to date.') }}</p></div>
-              <label>{{ tx('客户账本','Customer ledger') }}<select v-model="financeCustomer" @change="picked=[];invoicePick=[];rebatePick=[]"><option value="">{{ tx('全部客户','All customers') }}</option><option v-for="customer in customers" :key="customer.customer_id" :value="String(customer.customer_id)">{{ customer.company }}</option></select></label>
+              <label>{{ tx('客户账本','Customer ledger') }}<select v-model="financeCustomer" @change="picked=[];invoicePick=[];rebatePick=[];balanceRebatePick=[]"><option value="">{{ tx('全部客户','All customers') }}</option><option v-for="customer in customers" :key="customer.customer_id" :value="String(customer.customer_id)">{{ customer.company }}</option></select></label>
             </header>
             <nav class="fin-steps" :aria-label="tx('账款步骤','Accounts steps')">
               <button v-for="step in financeSteps" :key="step.key" type="button" class="fin-step" :class="{ idle: !step.count }" @click="scrollFinanceStep(step.key)"><span class="fin-no">{{ step.no }}</span><span class="fin-step-text"><strong>{{ step.title }}</strong><small>{{ step.count ? tx(`${step.count} 项待办`, `${step.count} to do`) : tx('无需处理', 'Nothing to do') }}</small></span></button>
@@ -1717,6 +1744,11 @@ async function loadOrderProviders(orderId: string) {
                 </ul>
                 <div v-if="balancePicked.length" class="fin-compose">
                   <label>{{ tx('规则说明（按所选订单自动生成，可修改）','Rule note (generated from the selected orders; editable)') }}<textarea v-model="settlementEvidence" rows="3" /></label>
+                  <fieldset class="balance-rebate-choices"><legend>{{ tx('选择要抵扣的返利（可选）','Select rebates to apply (optional)') }}</legend>
+                    <label v-for="credit in balanceRebates" :key="credit.id" class="checkbox-label"><input type="checkbox" v-model="balanceRebatePick" :value="credit.id" /><span>{{ credit.month }} · {{ tx('可用余额','Available') }} {{ quoteMoney(credit.remaining, credit.currency) }} · {{ credit.evidence }}</span></label>
+                    <p v-if="!balanceRebates.length" class="hint">{{ tx('该客户目前没有可用于这张账单的返利。','This customer has no earlier-month rebate available for this invoice.') }}</p>
+                  </fieldset>
+                  <div class="balance-preview"><span>{{ tx('订单尾款合计','Order balance total') }} <strong>{{ quoteMoney(balancePreview.gross, balancePreview.currency) }}</strong></span><span>{{ tx('返利抵扣','Rebate credit') }} <strong>−{{ quoteMoney(balancePreview.rebate, balancePreview.currency) }}</strong></span><span>{{ tx('账单应付总额','Invoice amount due') }} <strong>{{ quoteMoney(balancePreview.due, balancePreview.currency) }}</strong></span></div>
                   <div class="fin-row-actions"><button type="button" class="secondary" :disabled="busy" @click="fillEvidence">{{ tx('重新生成说明','Regenerate note') }}</button><button type="button" :disabled="busy" @click="settleReadyOrders">{{ tx(`生成尾款草稿（已选 ${balancePicked.length} 单）`, `Create balance draft (${balancePicked.length} selected)`) }}</button></div>
                 </div>
                 <p v-else class="hint">{{ tx('先勾选要开尾款的订单。','Tick the orders to invoice first.') }}</p>
@@ -2400,6 +2432,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .fin-tabs button.active:hover:not(:disabled) { border-bottom-color: #17523a; }
 .fin-pane { display: grid; gap: 10px; }
 .fin-rebate-form { display: grid; gap: 10px; padding: 12px; background: #f6f9f6; border-radius: 6px; }
+.balance-rebate-choices{display:grid;gap:6px;margin:0;padding:10px 12px;border:1px solid #d6dfe1;border-radius:8px}.balance-rebate-choices legend{padding:0 5px;font-size:13px;font-weight:700}.balance-rebate-choices .checkbox-label{min-height:34px}.balance-rebate-choices .hint{margin:2px 0}.balance-preview{display:flex;flex-wrap:wrap;gap:8px 18px;padding:10px 12px;border:1px solid #d6dfe1;border-radius:8px;background:#f7f9f9;font-size:13px}.balance-preview span{display:flex;gap:7px;align-items:center}.balance-preview span:last-child{margin-left:auto;color:#28343a}.balance-preview strong{font-variant-numeric:tabular-nums}
 .fin-rebate-form .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .fin-rebate-form .finance-evidence { grid-column: 1 / -1; }
 .fin-rebate-orders { border: 0; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 220px; overflow-y: auto; }

@@ -24,7 +24,6 @@ const NAV_ITEMS = [
   { path: "/portal/invoices", label_zh: "发票与付款", label_en: "Invoices", icon: "💰" },
   { path: "/portal/rebates", label_zh: "返现", label_en: "My Rebate", icon: "％" },
   { path: "/portal/profile", label_zh: "个人资料", label_en: "My Profile", icon: "👤" },
-  { path: "/portal/help", label_zh: "帮助", label_en: "Help", icon: "❓" },
 ];
 
 const currentNav = computed(() => {

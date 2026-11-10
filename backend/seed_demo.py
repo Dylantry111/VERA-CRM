@@ -72,8 +72,8 @@ def main():
         post(staff,'operations/fulfilment',dict(order_id=oid,kind='arrival',operation_key='demo-arrival-'+str(n+1),lines=arrival))
         if n==5:
             month=(business_now().date().replace(day=1)-timedelta(days=1)).strftime('%Y-%m')
-            post(staff,'operations/rebates',dict(customer_id=profiles[n%3]['customer_id'],source_order_ids=[oid],month=month,amount='35',evidence='DEMO confirmed opening credit; invented data',currency='NZD'))
-            inv=post(staff,'operations/settlements',dict(order_ids=[oid],operation_key='demo-balance',rules_evidence='DEMO all-arrived settlement example',billing_basis='all_arrived_remaining_total'))
+            credit=post(staff,'operations/rebates',dict(customer_id=profiles[n%3]['customer_id'],source_order_ids=[oid],month=month,amount='35',evidence='DEMO confirmed opening credit; invented data',currency='NZD'))
+            inv=post(staff,'operations/settlements',dict(order_ids=[oid],rebate_ids=[credit['id']],operation_key='demo-balance',rules_evidence='DEMO all-arrived settlement example',billing_basis='all_arrived_remaining_total'))
             post(staff,f"operations/invoices/{inv['id']}/received",{'note':'DEMO sample receipt only'})
             post(staff,'operations/fulfilment',dict(order_id=oid,kind='delivery',operation_key='demo-delivery-'+str(n+1),lines=arrival))
     with db() as c:

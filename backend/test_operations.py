@@ -159,15 +159,16 @@ with tempfile.TemporaryDirectory() as folder:
     rebate = dict(customer_id=a['customer_id'],source_order_ids=[oid],month='2026-01',amount='50',evidence='TEST confirmed monthly credit',currency='NZD')
     credit = post(staff,'operations/rebates',rebate)
     post(staff,'operations/rebates',rebate,409)
-    invoice = post(staff,'operations/settlements',settle)
+    invoice = post(staff,'operations/settlements',{**settle,'rebate_ids':[credit['id']]})
     post(staff,f"operations/invoices/{invoice['id']}/received",{'note':'TEST balance paid'})
     final = post(staff,'operations/fulfilment',dict(order_id=oid,kind='delivery',operation_key='delivery-002',lines=[dict(line_id='1',quantity=3),dict(line_id='2',quantity=2)]))['order']
     assert final['status']=='complete' and final['payment_status']=='paid' and final['completed_at']
     print('PASS fulfilment: partial actions rejected; full-order arrival/delivery, payment gate, mail and idempotency')
 
     assert invoice['gross']=='200.00' and invoice['amount']=='150.00'
-    assert post(staff,'operations/settlements',settle)['id'] == invoice['id']
-    post(staff,'operations/settlements',{**settle,'operation_key':'new-settle-001'},409)
+    settle_with_rebate={**settle,'rebate_ids':[credit['id']]}
+    assert post(staff,'operations/settlements',settle_with_rebate)['id'] == invoice['id']
+    post(staff,'operations/settlements',{**settle_with_rebate,'operation_key':'new-settle-001'},409)
     credits = staff.get('/api/operations/rebates').json()['credits']
     assert credits[0]['used']=='50.00' and credits[0]['remaining']=='0.00' and len(credits[0]['allocations'])==1
     with patch('email_service.configuration',return_value=({'configured':True},None)), patch('email_service.send_email',return_value='<test-invoice>') as send:
@@ -175,7 +176,7 @@ with tempfile.TemporaryDirectory() as folder:
         post(staff,f"operations/invoices/{invoice['id']}/send")
         assert send.call_count == 1
     ob = post(other,'portal/orders',{**body,'submission_key':'other-project'})
-    post(staff,'operations/settlements',{**settle,'order_ids':[oid,ob['id']],'operation_key':'mixed-companies'},422)
+    post(staff,'operations/settlements',{**settle_with_rebate,'order_ids':[oid,ob['id']],'operation_key':'mixed-companies'},422)
     assert len(other.get('/api/portal/consumption').json()['invoices']) == 0
     print('PASS settlement/rebate: company boundaries, deposit deduction, credit source/use dedupe and invoice-send dedupe')
 

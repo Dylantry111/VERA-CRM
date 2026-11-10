@@ -89,6 +89,10 @@ def build(invoice, customer, orders, payment=None):
     due = Decimal(invoice['amount'])
     gross = Decimal(invoice['gross']) if invoice.get('gross') else sum((Decimal(r['amount'].replace(',', '')) for r in rows), Decimal(0))
     rebate = max(gross - due, Decimal(0))
+    rebate_items = [
+        {'label': f"Monthly rebate · {item['month']}" if item.get('month') else 'Rebate credit', 'amount': money(Decimal(item['amount']))}
+        for item in invoice.get('rebate_allocations', []) if Decimal(str(item.get('amount', '0'))) > 0
+    ]
     rate = invoice.get('tax_rate') or next((o['tax_rate'] for o in orders.values() if o.get('tax_rate')), '0.15')
     bank = payment_lines(payment)
     model = {
@@ -106,6 +110,7 @@ def build(invoice, customer, orders, payment=None):
         'rows': rows,
         'gross': money(gross),
         'rebate': money(rebate) if rebate > 0 else '',
+        'rebate_items': rebate_items,
         'due': money(due),
         'gst': money(gst_included(due, rate)),
         'gst_rate': f"{Decimal(str(rate)) * 100:.0f}%",
@@ -148,7 +153,11 @@ def _text(m):
                 lines.append(f"    {label}: {m['currency']} {value}")
     lines.append('')
     if m['rebate']:
-        lines += [f"Subtotal: {m['currency']} {m['gross']}", f"Rebate applied: -{m['currency']} {m['rebate']}"]
+        lines.append(f"Subtotal: {m['currency']} {m['gross']}")
+        if m['rebate_items']:
+            lines += [f"{item['label']}: -{m['currency']} {item['amount']}" for item in m['rebate_items']]
+        else:
+            lines.append(f"Rebate applied: -{m['currency']} {m['rebate']}")
     lines += [f"Amount due: {m['currency']} {m['due']}", f"Includes GST ({m['gst_rate']}): {m['currency']} {m['gst']}", m['basis'], '']
     if m['payment']:
         lines += ['Payment details'] + [f"    {label}: {value}" for label, value in m['payment']] + ['']
@@ -173,8 +182,11 @@ def _html(m):
     span = 1 + len(labels)
     extra = ''
     if m['rebate']:
-        extra = (f'<tr><td colspan="{span - 1}" style="padding:10px 0 4px;font-size:13px;color:#64766b">Subtotal</td><td align="right" style="padding:10px 0 4px;font-size:13px;color:#64766b;white-space:nowrap">{e(m["currency"])} {m["gross"]}</td></tr>'
-                 f'<tr><td colspan="{span - 1}" style="padding:4px 0 12px;font-size:13px;color:#64766b">Rebate applied</td><td align="right" style="padding:4px 0 12px;font-size:13px;color:#64766b;white-space:nowrap">-{e(m["currency"])} {m["rebate"]}</td></tr>')
+        extra = f'<tr><td colspan="{span - 1}" style="padding:10px 0 4px;font-size:13px;color:#64766b">Subtotal</td><td align="right" style="padding:10px 0 4px;font-size:13px;color:#64766b;white-space:nowrap">{e(m["currency"])} {m["gross"]}</td></tr>'
+        if m['rebate_items']:
+            extra += ''.join(f'<tr><td colspan="{span - 1}" style="padding:4px 0;font-size:13px;color:#64766b">{e(item["label"])}</td><td align="right" style="padding:4px 0;font-size:13px;color:#64766b;white-space:nowrap">-{e(m["currency"])} {item["amount"]}</td></tr>' for item in m['rebate_items'])
+        else:
+            extra += f'<tr><td colspan="{span - 1}" style="padding:4px 0 12px;font-size:13px;color:#64766b">Rebate applied</td><td align="right" style="padding:4px 0 12px;font-size:13px;color:#64766b;white-space:nowrap">-{e(m["currency"])} {m["rebate"]}</td></tr>'
     pay = ''
     if m['payment']:
         pay = ('<tr><td style="padding:0 32px 16px"><div style="color:#64766b;font-size:11px;letter-spacing:.1em;margin-bottom:6px">PAYMENT DETAILS</div>'
@@ -258,7 +270,11 @@ def render_pdf(m):
     story += [table, Spacer(1, 4 * mm)]
     totals = []
     if m['rebate']:
-        totals += [[P('Subtotal', base), P(f"{m['currency']} {m['gross']}", right)], [P('Rebate applied', base), P(f"-{m['currency']} {m['rebate']}", right)]]
+        totals.append([P('Subtotal', base), P(f"{m['currency']} {m['gross']}", right)])
+        if m['rebate_items']:
+            totals += [[P(item['label'], base), P(f"-{m['currency']} {item['amount']}", right)] for item in m['rebate_items']]
+        else:
+            totals.append([P('Rebate applied', base), P(f"-{m['currency']} {m['rebate']}", right)])
     totals.append([P('Amount due', bold), P(f"{m['currency']} {m['due']}", due_right)])
     totals.append([P(f"Includes GST ({m['gst_rate']})", small), P(f"{m['currency']} {m['gst']}", small_right)])
     t = Table(totals, colWidths=[134 * mm, 40 * mm])

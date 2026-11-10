@@ -61,7 +61,7 @@ const steps = computed(() => [
     path: "/crm/finance",
     points: [
       tx("在“账款与返利”勾选同一公司、同币种、每一行都已到货且定金已收的订单，点“生成尾款草稿”。", "Under Accounts & rebates, tick orders of one company and currency where every line has arrived and the deposit is received, then click Create balance draft."),
-      tx("金额 = 订单总额 − 已存定金，再扣早于本月的已确认返利；“规则说明”按所选订单自动生成，可以修改。", "Amount = order total − stored deposit, then confirmed rebate balances from earlier months. The rule note is generated from the selected orders and can be edited."),
+      tx("金额 = 所选订单总额 − 已存定金 − 本次明确选择的可用返利；每条返利抵扣会列在发票上。“规则说明”按所选订单自动生成，可以修改。", "Amount = selected order totals − stored deposits − rebates explicitly selected for this invoice. Each rebate credit is listed on the invoice. The rule note is generated from the selected orders and can be edited."),
       tx("草稿检查无误后再单独发送，收到款项后点“确认尾款收款”。", "Review the draft, send it as a separate step, and click Confirm balance receipt once the money has arrived."),
     ],
     note: tx("生成草稿不会发给客户。", "Creating the draft sends nothing to the customer."),
@@ -72,7 +72,7 @@ const steps = computed(() => [
     hint: tx("只录入已确认金额", "Confirmed amounts only"),
     path: "/crm/finance",
     points: [
-      tx("在“返利”页填年月、金额、来源订单和确认依据，记入后可在下个月的尾款里自动抵扣。", "On the Rebates tab enter the month, amount, source orders and evidence; it is then deducted automatically from later balance invoices."),
+      tx("在“返利”页填年月、金额、来源订单和确认依据。创建尾款账单时，手动选择要抵扣的返利；用过的金额会显示关联账单。", "On the Rebates tab enter the month, amount, source orders and evidence. Select rebates explicitly when creating a balance invoice; used amounts show the linked invoice."),
       tx("同一来源订单不能重复计入；页面显示已用和余额。", "A source order cannot be counted twice; used and remaining amounts are shown."),
     ],
     note: tx("原始 Excel 里没有返利公式，所以系统不会自动算阶梯。需要的参数见 docs/REBATE-RULE-INPUTS.md。", "The source Excel has no rebate formula, so tiers are not calculated automatically. Required inputs are listed in docs/REBATE-RULE-INPUTS.md."),
