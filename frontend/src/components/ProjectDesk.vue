@@ -73,6 +73,14 @@ interface Rebate {
   remaining?: string;
   claimable?: boolean;
   evidence?: string;
+  calculation_source?: string;
+  company?: string;
+}
+interface RebateMonth {
+  month: string; customer_id?: number; company?: string; product_total: string; rebate: string; currency: string;
+  claim_status: string; claimable?: boolean;
+  orders: { order_id: string; order_number?: string; order_date: string; product_total: string; rebate: string }[];
+  rebate_credits: { id: string; amount: string; used: string; remaining: string; allocations: { invoice_id: string; invoice_number?: string; invoice_status?: string; amount: string }[] }[];
 }
 interface Provider {
   orders?: {id:string;order_number?:string;project_name:string;template_id?:number}[];
@@ -234,6 +242,7 @@ const shipmentCosts = reactive<Record<string, { freight_land: string; freight_se
 const purchaseForm = reactive<Record<string, { usd: string; sqm: string }>>({});
 const notices = ref<Notice[]>([]);
 const rebates = ref<Rebate[]>([]);
+const rebateMonths = ref<RebateMonth[]>([]);
 const balanceRebatePick = ref<string[]>([]);
 const balanceInvoiceOpen = ref(false);
 const balanceAdditionalItems = ref<{ id: string; description: string; amount: string }[]>([]);
@@ -447,7 +456,7 @@ async function load() {
     request<ProjectOrder[]>("operations/orders"),
     request<Invoice[]>("operations/invoices"),
     request<Notice[]>("operations/notifications"),
-    request<{ calculation_status: string; credits: Rebate[] }>("operations/rebates"),
+    request<{ calculation_status: string; credits: Rebate[]; months: RebateMonth[] }>("operations/rebates"),
     request<Provider[]>("operations/providers"),
     request<ProviderTemplate[]>("operations/provider-templates"),
     request<PricingVersion[]>("operations/pricing-templates"),
@@ -459,6 +468,7 @@ async function load() {
   invoices.value = billed;
   notices.value = mailed;
   rebates.value = credits.credits;
+  rebateMonths.value = credits.months || [];
   providers.value = providerList;
   providerTemplates.value = templateList;
   pricingVersions.value = versions;
@@ -1789,14 +1799,27 @@ async function loadOrderProviders(orderId: string) {
               <summary>{{ tx('返利与通知记录','Rebates & notifications') }}</summary>
               <nav class="fin-tabs" role="tablist"><button type="button" role="tab" :aria-selected="financePane==='rebates'" :class="{active:financePane==='rebates'}" @click="financePane='rebates'">{{ tx('返利','Rebates') }}</button><button type="button" role="tab" :aria-selected="financePane==='notifications'" :class="{active:financePane==='notifications'}" @click="financePane='notifications'">{{ tx('通知记录','Notifications') }}</button></nav>
               <div v-if="financePane==='rebates'" class="fin-pane">
-                <p class="hint">{{ tx('只录入已确认的月度返利金额，系统不自动推算返利。','Record only confirmed monthly amounts; rebate tiers are not inferred.') }}</p>
-                <div v-if="admin" class="fin-rebate-form">
+                <p class="hint">{{ tx('这里与客户端 My Rebate 共用同一套月度计算：按定金到账月份汇总产品金额。已结束月份达到返利门槛后会自动生成可抵扣余额；当前月份继续累计，暂不能抵扣。','This uses the same monthly calculation as the customer My Rebate page. Product totals follow deposit-paid dates. Once a qualifying month closes, its credit is created automatically; the current month continues accruing and is not yet claimable.') }}</p>
+                <div v-if="rebateMonths.some(m=>!financeCustomer || String(m.customer_id)===financeCustomer)" class="rebate-month-ledger">
+                  <article v-for="month in rebateMonths.filter(m=>!financeCustomer || String(m.customer_id)===financeCustomer)" :key="`${month.customer_id}-${month.month}`" class="rebate-month-card">
+                    <header><div><strong>{{ month.month }}</strong><small>{{ month.company }}</small></div><span class="rebate-state" :class="month.claim_status">{{ month.claim_status==='claimed'?tx('已抵扣','Claimed'):month.claim_status==='partially_claimed'?tx('部分抵扣','Partially claimed'):month.claimable?tx('可用于尾款','Available for balance'):month.claim_status==='awaiting_confirmation'?tx('本月累计中','Accruing'):tx('未达到门槛','Not earned') }}</span></header>
+                    <div class="rebate-month-totals"><span>{{ tx('产品金额','Product total') }} <b>{{ month.currency }} {{ month.product_total }}</b></span><span>{{ tx('返利','Rebate') }} <b>{{ month.currency }} {{ month.rebate }}</b></span></div>
+                    <details class="rebate-month-details"><summary>{{ tx(`查看 ${month.orders.length} 笔订单及抵扣记录`,`View ${month.orders.length} orders and claims`) }}</summary>
+                      <div v-for="order in month.orders" :key="order.order_id" class="rebate-order-line"><RouterLink :to="{path:'/crm/projects',query:{order:order.order_id}}">{{ order.order_number || order.order_id }}</RouterLink><span>{{ order.order_date }}</span><span>{{ month.currency }} {{ order.product_total }}</span><span>{{ month.currency }} {{ order.rebate }}</span></div>
+                      <p v-for="(credit,index) in month.rebate_credits" :key="`${credit.id}-${index}`" class="rebate-credit-line">{{ tx('账面金额','Credit') }} {{ month.currency }} {{ credit.amount }} · {{ tx('已用','Used') }} {{ credit.used }} · {{ tx('余额','Remaining') }} {{ credit.remaining }}<span v-for="allocation in credit.allocations" :key="allocation.invoice_id"> · {{ tx('账单','Invoice') }} {{ allocation.invoice_number || allocation.invoice_id }} ({{ month.currency }} {{ allocation.amount }})</span></p>
+                    </details>
+                  </article>
+                </div>
+                <p v-else class="hint">{{ tx('还没有符合返利计算条件的定金已付订单。','No deposit-paid orders are available for rebate calculation yet.') }}</p>
+                <details v-if="rebates.some(c=>(!financeCustomer || String(c.customer_id)===financeCustomer) && !rebateMonths.some(m=>m.customer_id===c.customer_id && m.month===c.month))" class="manual-rebate-tools"><summary>{{ tx('其他历史返利余额','Other historical rebate credits') }}</summary><div v-for="credit in rebates.filter(c=>(!financeCustomer || String(c.customer_id)===financeCustomer) && !rebateMonths.some(m=>m.customer_id===c.customer_id && m.month===c.month))" :key="credit.id" class="rebate-item"><strong>{{ credit.month }} · {{ credit.currency }} {{ credit.amount }}</strong><p>{{ credit.company || '' }} · {{ tx('已用','Used') }} {{ credit.used || '0.00' }} · {{ tx('余额','Remaining') }} {{ credit.remaining || '0.00' }} · {{ credit.evidence }}</p></div></details>
+                <details v-if="admin" class="manual-rebate-tools"><summary>{{ tx('手动导入或修正历史返利','Manual import or correction for historical credits') }}</summary>
+                <p class="hint">{{ tx('普通月份会自动计算并入账。仅在补录系统外的历史返利或修正特殊情况时使用。','Monthly credits are calculated and posted automatically. Use this only for historical credits from outside the system or exceptional corrections.') }}</p>
+                <div class="fin-rebate-form">
                   <div class="form-grid"><label>{{ tx('年月','Month') }}<input v-model="rebateForm.month" placeholder="2026-10" /></label><label>{{ tx('金额','Amount') }}<input v-model="rebateForm.amount" inputmode="decimal" /></label><label class="finance-evidence">{{ tx('确认依据','Evidence') }}<input v-model="rebateForm.evidence" /></label></div>
                   <fieldset class="fin-rebate-orders"><legend>{{ tx('来源订单（同一客户）','Source orders (one customer)') }}</legend><label v-for="order in financeOrders" :key="order.id" class="checkbox-label"><input type="checkbox" v-model="rebatePick" :value="order.id" /><span>{{ order.order_number }} · {{ order.project_name }} <small>{{ order.company }}</small></span></label></fieldset>
                   <button type="button" :disabled="busy || !rebatePick.length" @click="recordRebateForPick">{{ tx('记入已确认返利','Record confirmed rebate') }}</button>
                 </div>
-                <p v-if="!rebates.filter(c=>!financeCustomer || String(c.customer_id)===financeCustomer).length" class="hint">{{ tx('还没有返利记录。','No rebates recorded.') }}</p>
-                <div v-for="credit in rebates.filter(c=>!financeCustomer || String(c.customer_id)===financeCustomer)" :key="credit.id" class="rebate-item"><strong>{{ credit.month }} · {{ credit.currency }} {{ credit.amount }}</strong><p>{{ tx('已用','Used') }} {{ credit.used || '0.00' }} · {{ tx('余额','Remaining') }} {{ credit.remaining || '0.00' }} · {{ credit.evidence }}</p><p v-for="oid in credit.source_order_ids" :key="oid"><RouterLink :to="{path:'/crm/projects',query:{order:oid}}">{{ orders.find(o=>o.id===oid)?.order_number }} · {{ orders.find(o=>o.id===oid)?.project_name }}</RouterLink></p><p v-for="(allocation,index) in credit.allocations" :key="index">{{ tx('已抵扣发票','Invoice allocation') }} {{ allocationLabel(allocation.invoice_id) }} · {{ allocation.amount }}</p></div>
+                </details>
               </div>
               <div v-else class="fin-pane">
                 <p v-if="!notices.filter(n=>!financeCustomer || String(n.customer_id)===financeCustomer).length" class="hint">{{ tx('还没有通知记录。','No notifications yet.') }}</p>
@@ -2441,6 +2464,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .desk .fin-tabs button.active:hover:not(:disabled) { border-bottom-color: #17523a; }
 .fin-pane { display: grid; gap: 10px; }
 .fin-rebate-form { display: grid; gap: 10px; padding: 12px; background: #f6f9f6; border-radius: 6px; }
+.rebate-month-ledger{display:grid;gap:8px}.rebate-month-card{padding:12px;border:1px solid #dce6df;border-radius:8px;background:#fff}.rebate-month-card>header{display:flex;align-items:center;justify-content:space-between;gap:12px}.rebate-month-card>header>div{display:grid;gap:2px}.rebate-month-card>header small{color:#687970;font-size:11px}.rebate-state{padding:4px 9px;border-radius:999px;background:#eef2ef;color:#596a60;font-size:10px;font-weight:700;white-space:nowrap}.rebate-state.unclaimed,.rebate-state.partially_claimed{background:#e9f3ec;color:#28613f}.rebate-state.claimed{background:#e1eee5;color:#25573a}.rebate-state.awaiting_confirmation{background:#fff4df;color:#845a19}.rebate-month-totals{display:flex;gap:24px;flex-wrap:wrap;margin-top:8px;color:#65746b;font-size:12px}.rebate-month-totals b{margin-left:5px;color:#263b30;font-variant-numeric:tabular-nums}.rebate-month-details{margin-top:8px;padding-top:7px;border-top:1px solid #edf1ed}.rebate-month-details summary,.manual-rebate-tools>summary{cursor:pointer;color:#426653;font-size:11px;font-weight:650}.rebate-order-line{display:grid;grid-template-columns:minmax(120px,1fr) repeat(3,minmax(90px,.7fr));gap:8px;padding:6px 0;border-bottom:1px solid #f0f3f0;font-size:11px}.rebate-order-line span{text-align:right;font-variant-numeric:tabular-nums}.rebate-credit-line{margin:7px 0 0;color:#55675c;font-size:11px}.manual-rebate-tools{margin-top:12px;padding:9px 11px;border:1px solid #e1e8e2;border-radius:7px;background:#fafcfa}.manual-rebate-tools>.hint{margin:8px 0}.manual-rebate-tools .fin-rebate-form{padding:8px 0;background:transparent}
 .balance-rebate-choices{display:grid;gap:6px;margin:0;padding:10px 12px;border:1px solid #d6dfe1;border-radius:8px}.balance-rebate-choices legend{padding:0 5px;font-size:13px;font-weight:700}.balance-rebate-choices .checkbox-label{min-height:34px}.balance-rebate-choices .hint{margin:2px 0}.balance-preview{display:flex;flex-wrap:wrap;gap:8px 18px;padding:10px 12px;border:1px solid #d6dfe1;border-radius:8px;background:#f7f9f9;font-size:13px}.balance-preview span{display:flex;gap:7px;align-items:center}.balance-preview span:last-child{margin-left:auto;color:#28343a}.balance-preview strong{font-variant-numeric:tabular-nums}
 .fin-rebate-form .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .fin-rebate-form .finance-evidence { grid-column: 1 / -1; }

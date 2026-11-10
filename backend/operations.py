@@ -2684,73 +2684,106 @@ def register(app, s):
             return [{'effective_from': '1900-01-01', 'threshold': '10000.00', 'rate': '0.05'}]
         return saved
 
+    def rebate_months(c, cid):
+        """Single monthly calculation shared by the customer portal, staff ledger and invoice credits."""
+        rules = active_rebate_rules(c)
+        orders = records(c, 'project', cid)
+        groups = {}
+        for d in orders:
+            paid = d.get('deposit_paid_at')
+            if not paid or d.get('status') == 'draft' or d.get('currency') != 'NZD':
+                continue
+            deposit_day = d.get('order_date') or order_date_from_timestamp(paid) or str(paid)[:10]
+            applicable = [rule for rule in rules if rule['effective_from'] <= deposit_day]
+            rule = applicable[-1] if applicable else rules[0]
+            month = deposit_day[:7]
+            bucket_key = (month, rule['effective_from'])
+            entry = groups.setdefault(bucket_key, {'month': month, 'rule': rule, 'orders': [], 'subtotal': Decimal('0')})
+            amount = Decimal(str(d.get('subtotal') or '0'))
+            entry['subtotal'] += amount
+            entry['orders'].append((d, deposit_day, amount))
+        monthly = {}
+        for (month, _), group in groups.items():
+            rule = group['rule']
+            threshold, rate = Decimal(str(rule['threshold'])), Decimal(str(rule['rate']))
+            qualifies = group['subtotal'] > threshold
+            month_entry = monthly.setdefault(month, {'month': month, 'product_total': Decimal('0'), 'rebate': Decimal('0'), 'currency': 'NZD', 'orders': []})
+            month_entry['product_total'] += group['subtotal']
+            for d, deposit_day, amount in group['orders']:
+                earned = (amount * rate).quantize(Decimal('.01'), rounding=ROUND_HALF_UP) if qualifies else Decimal('0.00')
+                month_entry['rebate'] += earned
+                month_entry['orders'].append({'order_id': d['id'], 'order_number': d.get('order_number'), 'order_date': deposit_day,
+                                              'product_total': money(amount), 'currency': d['currency'], 'rate': float(rate) if qualifies else 0, 'rebate': money(earned),
+                                              'qualifying_total': money(group['subtotal']), 'threshold': money(threshold)})
+
+        current_month = s.business_now().strftime('%Y-%m')
+        existing_credits = records(c, 'rebate', cid)
+        # Close prior months automatically. Existing confirmed imports count toward that month's calculated
+        # entitlement; only any shortfall is created as an automatic credit, preventing duplicate claims.
+        for month, entry in monthly.items():
+            expected = Decimal(entry['rebate'])
+            if month >= current_month or expected <= 0:
+                continue
+            month_credits = [credit for credit in existing_credits if credit.get('month') == month and credit.get('currency') == entry['currency']]
+            imported = sum((Decimal(str(credit.get('amount', '0'))) for credit in month_credits if credit.get('calculation_source') != 'monthly_auto'), Decimal('0'))
+            target = max(expected - imported, Decimal('0.00'))
+            auto_id = f"rebate:auto:{cid}:{month}"
+            auto = next((credit for credit in month_credits if credit.get('id') == auto_id), None)
+            if auto:
+                if not auto.get('allocations') and Decimal(str(auto.get('used', '0'))) == 0:
+                    auto.update(amount=money(target), remaining=money(target), source_order_ids=[row['order_id'] for row in entry['orders'] if Decimal(row['rebate']) > 0],
+                                evidence='Automatically calculated from deposit-paid product totals and the active monthly rebate rule.')
+                    put(c, 'rebate', auto, cid)
+            elif target > 0:
+                auto = {'id': auto_id, 'customer_id': cid, 'month': month, 'amount': money(target), 'currency': entry['currency'],
+                        'used': '0.00', 'remaining': money(target), 'status': 'confirmed_auto', 'calculation_source': 'monthly_auto',
+                        'source_order_ids': [row['order_id'] for row in entry['orders'] if Decimal(row['rebate']) > 0],
+                        'evidence': 'Automatically calculated from deposit-paid product totals and the active monthly rebate rule.',
+                        'created_at': s.now(), 'actor': 'system', 'allocations': []}
+                put(c, 'rebate', auto, cid)
+                existing_credits.append(auto)
+
+        credits = records(c, 'rebate', cid)
+        invoices = {invoice['id']: invoice for invoice in records(c, 'invoice', cid)}
+        result = []
+        for month, entry in sorted(monthly.items(), reverse=True):
+            entry['product_total'] = money(entry['product_total'])
+            entry['rebate'] = money(entry['rebate'])
+            entry['orders'].sort(key=lambda order: order['order_date'])
+            month_credits = [credit for credit in credits if credit.get('month') == month and credit.get('currency') == entry['currency']]
+            claim_records = []
+            for credit in month_credits:
+                allocations = []
+                for allocation in credit.get('allocations', []):
+                    invoice = invoices.get(allocation.get('invoice_id'))
+                    if invoice:
+                        allocations.append({'invoice_id': invoice['id'], 'invoice_number': invoice.get('invoice_number'),
+                                            'invoice_status': invoice.get('status'), 'amount': allocation.get('amount', '0.00')})
+                remaining = Decimal(str(credit.get('remaining', '0.00')))
+                used = Decimal(str(credit.get('used', '0.00')))
+                state = 'partially_claimed' if used > 0 and remaining > 0 else 'claimed' if used > 0 and remaining == 0 else 'unclaimed'
+                claim_records.append({'id': credit['id'], 'amount': credit['amount'], 'used': money(used), 'remaining': money(remaining),
+                                      'claimed': state == 'claimed', 'claim_status': state, 'allocations': allocations})
+            entry['rebate_credits'] = claim_records
+            entry['claimable'] = month < current_month and sum((Decimal(item['remaining']) for item in claim_records), Decimal('0')) > 0
+            if not claim_records:
+                entry['claim_status'] = 'awaiting_confirmation' if Decimal(entry['rebate']) > 0 else 'not_earned'
+            elif any(Decimal(item['used']) > 0 and Decimal(item['remaining']) > 0 for item in claim_records):
+                entry['claim_status'] = 'partially_claimed'
+            elif all(Decimal(item['remaining']) == 0 for item in claim_records) and any(Decimal(item['used']) > 0 for item in claim_records):
+                entry['claim_status'] = 'claimed'
+            elif sum((Decimal(item['amount']) for item in claim_records), Decimal('0')) == 0:
+                entry['claim_status'] = 'awaiting_confirmation' if Decimal(entry['rebate']) > 0 else 'not_earned'
+            else:
+                entry['claim_status'] = 'unclaimed'
+            result.append(entry)
+        return {'months': result, 'rules': rules}
+
     @app.get('/api/portal/rebates')
     def portal_rebates(cid=Depends(customer_auth)):
         with s.db() as c:
-            rules = active_rebate_rules(c)
-            orders = records(c, 'project', cid)
-            credits = records(c, 'rebate', cid)
-            invoices = {invoice['id']: invoice for invoice in records(c, 'invoice', cid)}
-            groups = {}
-            for d in orders:
-                paid = d.get('deposit_paid_at')
-                if not paid or d.get('status') == 'draft' or d.get('currency') != 'NZD':
-                    continue
-                deposit_day = d.get('order_date') or order_date_from_timestamp(paid) or str(paid)[:10]
-                applicable = [rule for rule in rules if rule['effective_from'] <= deposit_day]
-                rule = applicable[-1] if applicable else rules[0]
-                month = deposit_day[:7]
-                bucket_key = (month, rule['effective_from'])
-                entry = groups.setdefault(bucket_key, {'month': month, 'rule': rule, 'orders': [], 'subtotal': Decimal('0')})
-                amount = Decimal(str(d.get('subtotal') or '0'))
-                entry['subtotal'] += amount
-                entry['orders'].append((d, deposit_day, amount))
-            monthly = {}
-            for (month, _), group in groups.items():
-                rule = group['rule']
-                threshold, rate = Decimal(str(rule['threshold'])), Decimal(str(rule['rate']))
-                qualifies = group['subtotal'] > threshold
-                month_entry = monthly.setdefault(month, {'month': month, 'product_total': Decimal('0'), 'rebate': Decimal('0'), 'currency': 'NZD', 'orders': []})
-                month_entry['product_total'] += group['subtotal']
-                for d, deposit_day, amount in group['orders']:
-                    earned = (amount * rate).quantize(Decimal('.01'), rounding=ROUND_HALF_UP) if qualifies else Decimal('0.00')
-                    month_entry['rebate'] += earned
-                    month_entry['orders'].append({'order_id': d['id'], 'order_number': d.get('order_number'), 'order_date': deposit_day,
-                                                  'product_total': money(amount), 'currency': d['currency'], 'rate': float(rate) if qualifies else 0, 'rebate': money(earned),
-                                                  'qualifying_total': money(group['subtotal']), 'threshold': money(threshold)})
-            result = []
-            for month, entry in sorted(monthly.items(), reverse=True):
-                entry['product_total'] = money(entry['product_total'])
-                entry['rebate'] = money(entry['rebate'])
-                entry['orders'].sort(key=lambda order: order['order_date'])
-                month_credits = [credit for credit in credits if credit.get('month') == month and credit.get('currency') == entry['currency']]
-                claim_records = []
-                for credit in month_credits:
-                    allocations = []
-                    for allocation in credit.get('allocations', []):
-                        invoice = invoices.get(allocation.get('invoice_id'))
-                        if invoice:
-                            allocations.append({'invoice_id': invoice['id'], 'invoice_number': invoice.get('invoice_number'),
-                                                'invoice_status': invoice.get('status'), 'amount': allocation.get('amount', '0.00')})
-                    remaining = Decimal(str(credit.get('remaining', '0.00')))
-                    used = Decimal(str(credit.get('used', '0.00')))
-                    state = 'partially_claimed' if used > 0 and remaining > 0 else 'claimed' if used > 0 and remaining == 0 else 'unclaimed'
-                    claim_records.append({'amount': credit['amount'], 'used': money(used), 'remaining': money(remaining),
-                                          'claimed': state == 'claimed', 'claim_status': state,
-                                          'allocations': allocations})
-                entry['rebate_credits'] = claim_records
-                if not claim_records:
-                    entry['claim_status'] = 'awaiting_confirmation' if Decimal(entry['rebate']) > 0 else 'not_earned'
-                elif any(Decimal(item['used']) > 0 and Decimal(item['remaining']) > 0 for item in claim_records) or (
-                    any(Decimal(item['used']) > 0 for item in claim_records) and any(Decimal(item['remaining']) > 0 for item in claim_records)
-                ):
-                    entry['claim_status'] = 'partially_claimed'
-                elif all(Decimal(item['remaining']) == 0 for item in claim_records):
-                    entry['claim_status'] = 'claimed'
-                else:
-                    entry['claim_status'] = 'unclaimed'
-                result.append(entry)
-            return {'months': result, 'rules': rules}
+            c.execute('BEGIN IMMEDIATE')
+            return rebate_months(c, cid)
 
     @app.get('/api/operations/rebate-rules')
     def list_rebate_rules(actor=Depends(s.require_admin)):
@@ -3258,15 +3291,31 @@ def register(app, s):
     @app.get('/api/operations/rebates')
     def rebates(actor=Depends(s.auth)):
         with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            customer_ids = sorted({order['customer_id'] for order in records(c, 'project')})
+            months = []
+            for cid in customer_ids:
+                try:
+                    company = profile(c, cid).get('company', '')
+                except HTTPException:
+                    row = c.execute('SELECT company FROM customers WHERE id=?', (cid,)).fetchone()
+                    company = row['company'] if row else ''
+                for month in rebate_months(c, cid)['months']:
+                    months.append({**month, 'customer_id': cid, 'company': company})
             current_month = s.business_now().strftime('%Y-%m')
             credits = []
             for rebate in records(c, 'rebate'):
+                try:
+                    company = profile(c, rebate['customer_id']).get('company', '')
+                except HTTPException:
+                    row = c.execute('SELECT company FROM customers WHERE id=?', (rebate['customer_id'],)).fetchone()
+                    company = row['company'] if row else ''
                 remaining = Decimal(str(rebate.get('remaining', '0.00')))
                 used = Decimal(str(rebate.get('used', '0.00')))
                 claim_status = 'partially_claimed' if used > 0 and remaining > 0 else 'claimed' if used > 0 and remaining == 0 else 'unclaimed'
-                credits.append({**rebate, 'claimable': remaining > 0 and rebate.get('month', '') < current_month,
+                credits.append({**rebate, 'company': company, 'claimable': remaining > 0 and rebate.get('month', '') < current_month,
                                 'claimed': claim_status == 'claimed', 'claim_status': claim_status})
-            return {'calculation_status': 'confirmed_monthly_rules_required', 'credits': credits}
+            return {'calculation_status': 'automatic_monthly_calculation', 'credits': credits, 'months': months}
 
     def create_balance_invoice(c, orders, actor, iid, rules_evidence, request_hash, rebate_ids=None, additional_items=None):
         """One draft balance invoice for arrived orders of one company, with only explicitly selected rebate credits."""
@@ -3322,6 +3371,7 @@ def register(app, s):
                 raise HTTPException(409, 'Balance invoices require confirmed deposit receipt and warehouse-arrived order progress')
             if any(d.get('balance_invoice_id') for d in orders):
                 raise HTTPException(409, 'An order already has a balance invoice')
+            rebate_months(c, orders[0]['customer_id'])
             for rebate_id in body.rebate_ids:
                 rebate = get(c, rebate_id, 'rebate')
                 if rebate['customer_id'] != orders[0]['customer_id'] or rebate['currency'] != orders[0]['currency']:
