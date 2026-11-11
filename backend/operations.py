@@ -1012,9 +1012,9 @@ class MailTemplate(Input):
 
 
 class MailboxPreferencesEdit(Input):
-    templates: list[MailTemplate] = Field(default_factory=list, max_length=30)
-    signature_text: str = Field(default='', max_length=10000)
-    signature_image_data: str = Field(default='', max_length=1500000)
+    templates: list[MailTemplate] | None = Field(default=None, max_length=30)
+    signature_text: str | None = Field(default=None, max_length=10000)
+    signature_image_data: str | None = Field(default=None, max_length=1500000)
 
     @field_validator('signature_image_data')
     @classmethod
@@ -1025,7 +1025,7 @@ class MailboxPreferencesEdit(Input):
 
     @model_validator(mode='after')
     def unique_mail_templates(self):
-        ids = [template.id for template in self.templates]
+        ids = [template.id for template in (self.templates or [])]
         if len(ids) != len(set(ids)):
             raise ValueError('Email template IDs must be unique')
         return self
@@ -2185,11 +2185,16 @@ def register(app, s):
 
     @app.post('/api/operations/mailbox/preferences')
     def save_mailbox_preferences(body: MailboxPreferencesEdit, actor=Depends(s.require_admin)):
-        saved = {**body.model_dump(mode='json'), 'id': 'mailbox-preferences', 'updated_at': s.now(), 'updated_by': actor}
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
+            previous = c.execute("SELECT data FROM operations_records WHERE id='mailbox-preferences'").fetchone()
+            current = json.loads(previous['data']) if previous else {
+                'templates': [], 'signature_text': '', 'signature_image_data': ''}
+            updates = body.model_dump(exclude_unset=True, exclude_none=True, mode='json')
+            saved = {**current, **updates, 'id': 'mailbox-preferences', 'updated_at': s.now(), 'updated_by': actor}
             put(c, 'setting', saved)
-        return {key: saved[key] for key in ('templates', 'signature_text', 'signature_image_data')}
+        return {key: saved.get(key, default) for key, default in {
+            'templates': [], 'signature_text': '', 'signature_image_data': ''}.items()}
 
     @app.post('/api/operations/mailbox/connect')
     def connect_mailbox(body: MailboxConnect, actor=Depends(s.require_admin)):

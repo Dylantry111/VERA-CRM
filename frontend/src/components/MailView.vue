@@ -33,6 +33,7 @@ const settingsOpen = ref(false);
 const templateDraft = reactive({ id: "", name: "", subject: "", body: "" });
 const templateSelected = ref("");
 const imageInput = ref<HTMLInputElement | null>(null);
+const signatureImageDraft = ref("");
 const messagePurpose = ref("existing_notice");
 const consentConfirmed = ref(false);
 const consentSource = ref("");
@@ -92,19 +93,35 @@ function editTemplate(id = "") {
 async function saveTemplate() {
   if (!templateDraft.name.trim()) return;
   const next = { ...templateDraft, id: templateDraft.id || crypto.randomUUID() };
-  const existing = preferences.value.templates.findIndex(row => row.id === next.id);
-  if (existing >= 0) preferences.value.templates.splice(existing, 1, next);
-  else preferences.value.templates.push(next);
-  await saveMailPreferences();
+  const templates = [...preferences.value.templates];
+  const existing = templates.findIndex(row => row.id === next.id);
+  if (existing >= 0) templates.splice(existing, 1, next);
+  else templates.push(next);
+  await saveMailPreferences({ templates }, tx("邮件模板已保存。", "Email template saved."));
 }
 
-async function saveMailPreferences() {
+async function saveSignatureText() {
+  await saveMailPreferences({ signature_text: preferences.value.signature_text }, tx("邮件签名已保存。", "Email signature saved."));
+}
+
+async function saveSignatureLogo() {
+  await saveMailPreferences({ signature_image_data: signatureImageDraft.value }, tx("签名 Logo 已保存。", "Signature logo saved."));
+}
+
+async function saveMailPreferences(changes: Partial<MailPreferences>, successMessage: string) {
   busy.value = true; error.value = ""; notice.value = "";
   try {
-    preferences.value = await request<MailPreferences>("operations/mailbox/preferences", preferences.value);
-    notice.value = tx("邮件模板与签名已保存。", "Email templates and signature saved.");
+    preferences.value = await request<MailPreferences>("operations/mailbox/preferences", changes);
+    signatureImageDraft.value = preferences.value.signature_image_data;
+    notice.value = successMessage;
   } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
   finally { busy.value = false; }
+}
+
+function openMailSettings() {
+  signatureImageDraft.value = preferences.value.signature_image_data;
+  editTemplate(templateSelected.value);
+  settingsOpen.value = true;
 }
 
 function readSignatureImage(event: Event) {
@@ -115,7 +132,7 @@ function readSignatureImage(event: Event) {
     return;
   }
   const reader = new FileReader();
-  reader.onload = () => { preferences.value.signature_image_data = String(reader.result || ""); };
+  reader.onload = () => { signatureImageDraft.value = String(reader.result || ""); };
   reader.readAsDataURL(file);
 }
 
@@ -272,7 +289,7 @@ onMounted(() => void loadStatus());
 
 <template>
   <section class="mail-workspace">
-    <header class="mail-page-head"><div><p class="eyebrow">VERA · COMMUNICATIONS</p><h1>{{ tx("邮件","Mail") }}</h1><p>{{ tx("在后台查看并管理企业邮箱。","View and manage your business mailbox from the admin workspace.") }}</p></div><div v-if="status?.connected" class="mail-head-actions"><span class="connected-pill">{{ status.email }}</span><button type="button" class="mail-icon-button" :disabled="loading" :aria-label="tx('刷新邮件','Refresh mail')" @click="loadMessages"><RefreshCw :size="16" /></button><button type="button" class="mail-icon-button" :aria-label="tx('邮件模板与签名设置','Email template and signature settings')" @click="settingsOpen=true;editTemplate(templateSelected)"><Settings :size="16" /> {{ tx('邮件设置','Mail settings') }}</button><button type="button" class="mail-primary" @click="openCompose()"><PenLine :size="15" /> {{ tx("写邮件","Compose") }}</button></div></header>
+    <header class="mail-page-head"><div><p class="eyebrow">VERA · COMMUNICATIONS</p><h1>{{ tx("邮件","Mail") }}</h1><p>{{ tx("在后台查看并管理企业邮箱。","View and manage your business mailbox from the admin workspace.") }}</p></div><div v-if="status?.connected" class="mail-head-actions"><span class="connected-pill">{{ status.email }}</span><button type="button" class="mail-icon-button" :disabled="loading" :aria-label="tx('刷新邮件','Refresh mail')" @click="loadMessages"><RefreshCw :size="16" /></button><button type="button" class="mail-icon-button" :aria-label="tx('邮件模板与签名设置','Email template and signature settings')" @click="openMailSettings"><Settings :size="16" /> {{ tx('邮件设置','Mail settings') }}</button><button type="button" class="mail-primary" @click="openCompose()"><PenLine :size="15" /> {{ tx("写邮件","Compose") }}</button></div></header>
     <p v-if="error" class="mail-error" role="alert">{{ error }}</p><p v-if="notice" class="mail-notice" role="status">{{ notice }}</p>
     <section v-if="!status?.connected" class="mail-connect-card">
       <div class="mail-connect-icon"><Mail :size="22" /></div><h2>{{ tx("连接 Titan 邮箱","Connect Titan mailbox") }}</h2><p>{{ tx("已识别邮箱地址 Dylan@verashading.com。连接后，后台会直接从 Titan 同步文件夹和邮件。","Mailbox address identified as Dylan@verashading.com. Once connected, folders and emails are read directly from Titan.") }}</p>
@@ -294,10 +311,11 @@ onMounted(() => void loadStatus());
       <label>{{ tx("主题","Subject") }}<input v-model.trim="compose.subject" required maxlength="500" /></label><label>{{ tx("邮件内容","Message") }}<textarea v-model="compose.body" rows="9" required></textarea></label>
       <section v-if="messagePurpose !== 'existing_notice'" class="consent-check"><label><input v-model="consentConfirmed" type="checkbox" required />{{ tx("我已核实收件人同意接收此类商业邮件","I have verified recipient consent for this commercial email") }}</label><label>{{ tx("同意依据/来源","Consent basis/source") }}<input v-model.trim="consentSource" :placeholder="tx('例如：客户申请、网站勾选或相关业务公开邮箱','e.g. customer request, website opt-in or relevant published business address')" required /></label><small>{{ tx("商业邮件会附带退订说明，并逐个地址单独发送。","Commercial email includes an unsubscribe instruction and is sent separately to each address.") }}</small></section>
       <footer><span>{{ status?.email }} · {{ compose.to.split(/[,;\s]+/).filter(Boolean).length }} {{ tx('位收件人','recipient(s)') }}</span><button type="submit" class="mail-primary" :disabled="busy">{{ busy ? tx("发送中…","Sending…") : tx("逐封发送","Send individually") }}</button></footer></form></div>
-    <div v-if="settingsOpen" class="compose-backdrop" @click.self="settingsOpen=false"><form class="compose-card mail-settings-card" @submit.prevent="saveMailPreferences"><header><div><p class="compose-eyebrow">VERA · BRAND VOICE</p><h2>{{ tx("邮件模板与签名","Email templates & signature") }}</h2></div><button type="button" :aria-label="tx('关闭','Close')" @click="settingsOpen=false"><X :size="18" /></button></header>
-      <section class="template-editor"><h3>{{ tx("邮件模板","Email templates") }}</h3><div class="template-actions"><select v-model="templateSelected" @change="editTemplate(templateSelected)"><option value="">{{ tx('选择现有模板','Choose a template') }}</option><option v-for="template in preferences.templates" :key="template.id" :value="template.id">{{ template.name }}</option></select><button type="button" class="mail-icon-button" @click="templateSelected='';editTemplate()"><Plus :size="15" /> {{ tx('新模板','New template') }}</button></div><label>{{ tx("模板名称","Template name") }}<input v-model="templateDraft.name" required /></label><label>{{ tx("主题","Subject") }}<input v-model="templateDraft.subject" maxlength="500" /></label><label>{{ tx("正文","Message") }}<textarea v-model="templateDraft.body" rows="5"></textarea></label><button type="button" class="mail-icon-button" :disabled="busy || !templateDraft.name.trim()" @click="saveTemplate"><Save :size="15" /> {{ tx('保存模板','Save template') }}</button></section>
-      <section class="signature-editor"><h3>{{ tx("发送签名","Signature") }}</h3><label>{{ tx("签名文字","Signature text") }}<textarea v-model="preferences.signature_text" rows="4" placeholder="Name · VERA Shading Solutions · Contact details"></textarea></label><input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="readSignatureImage" /><button type="button" class="mail-icon-button" @click="imageInput?.click()"><ImagePlus :size="15" /> {{ tx('添加 Logo 图片','Add logo image') }}</button><img v-if="preferences.signature_image_data" class="signature-preview" :src="preferences.signature_image_data" alt="Email signature image preview" /><button type="submit" class="mail-primary" :disabled="busy">{{ busy ? tx('保存中…','Saving…') : tx('保存邮件设置','Save mail settings') }}</button></section>
-    </form></div>
+    <div v-if="settingsOpen" class="compose-backdrop" @click.self="settingsOpen=false"><section class="compose-card mail-settings-card" role="dialog" aria-modal="true" :aria-label="tx('邮件设置','Mail settings')"><header><div><p class="compose-eyebrow">VERA · BRAND VOICE</p><h2>{{ tx("邮件设置","Mail settings") }}</h2></div><button type="button" :aria-label="tx('关闭','Close')" @click="settingsOpen=false"><X :size="18" /></button></header>
+      <form class="template-editor" @submit.prevent="saveTemplate"><h3>{{ tx("邮件模板","Email templates") }}</h3><div class="template-actions"><select v-model="templateSelected" @change="editTemplate(templateSelected)"><option value="">{{ tx('选择现有模板','Choose a template') }}</option><option v-for="template in preferences.templates" :key="template.id" :value="template.id">{{ template.name }}</option></select><button type="button" class="mail-icon-button" @click="templateSelected='';editTemplate()"><Plus :size="15" /> {{ tx('新模板','New template') }}</button></div><label>{{ tx("模板名称","Template name") }}<input v-model="templateDraft.name" required /></label><label>{{ tx("主题","Subject") }}<input v-model="templateDraft.subject" maxlength="500" /></label><label>{{ tx("正文","Message") }}<textarea v-model="templateDraft.body" rows="5"></textarea></label><button type="submit" class="mail-primary" :disabled="busy || !templateDraft.name.trim()"><Save :size="15" /> {{ tx('保存模板','Save template') }}</button></form>
+      <section class="signature-logo-editor"><h3>{{ tx("签名 Logo","Signature logo") }}</h3><p>{{ tx("上传或更换邮件签名中显示的公司 Logo。","Upload or replace the company logo shown in your email signature.") }}</p><input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="readSignatureImage" /><div class="signature-logo-actions"><button type="button" class="mail-icon-button" @click="imageInput?.click()"><ImagePlus :size="15" /> {{ tx('上传 Logo','Upload logo') }}</button><button v-if="signatureImageDraft" type="button" class="mail-icon-button" @click="signatureImageDraft=''">{{ tx('移除 Logo','Remove logo') }}</button></div><img v-if="signatureImageDraft" class="signature-preview" :src="signatureImageDraft" alt="Email signature logo preview" /><p v-else class="mail-help">{{ tx("尚未设置 Logo。","No logo is set yet.") }}</p><button type="button" class="mail-primary" :disabled="busy" @click="saveSignatureLogo">{{ busy ? tx('保存中…','Saving…') : tx('保存 Logo','Save logo') }}</button></section>
+      <form class="signature-editor" @submit.prevent="saveSignatureText"><h3>{{ tx("邮件签名文字","Email signature text") }}</h3><label>{{ tx("签名内容","Signature text") }}<textarea v-model="preferences.signature_text" rows="4" placeholder="Name · VERA Shading Solutions · Contact details"></textarea></label><button type="submit" class="mail-primary" :disabled="busy">{{ busy ? tx('保存中…','Saving…') : tx('保存签名','Save signature') }}</button></form>
+    </section></div>
   </section>
 </template>
 
@@ -356,7 +374,7 @@ onMounted(() => void loadStatus());
 .compose-card>header h2{margin:0;color:#304451;font-size:20px}.compose-card>header button{display:grid;place-items:center;width:36px;height:36px;border:1px solid #d6e0e5;border-radius:50%;background:#fff;color:#405969;cursor:pointer}
 .compose-card>label{display:grid;gap:5px;color:#425966;font-size:12px;font-weight:650}.compose-card textarea{resize:vertical;line-height:1.5}
 .compose-card footer{position:sticky;bottom:-19px;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px -19px -19px;padding:12px 19px;border-top:1px solid #e5ebee;background:#fff}.compose-card footer span{color:#687b86;font-size:11px}
-.mail-settings-card{width:min(760px,96vw)}.template-editor,.signature-editor{gap:10px;padding:13px;border-color:#d8e2e7;background:#f8fafb}.mail-settings-card h3{margin:0;font-size:15px;color:#344956}
+.mail-settings-card{width:min(760px,96vw);gap:13px}.template-editor,.signature-editor,.signature-logo-editor{gap:10px;padding:13px;border:1px solid #d8e2e7;border-radius:9px;background:#f8fafb}.mail-settings-card h3{margin:0;font-size:15px;color:#344956}.signature-logo-editor{display:grid}.signature-logo-editor>p{margin:0;color:#647782;font-size:12px;line-height:1.5}.signature-logo-actions{display:flex;gap:8px;flex-wrap:wrap}.signature-logo-editor>.mail-help{margin:0}
 .template-editor>label,.signature-editor>label{font-size:12px;color:#425966}.template-editor textarea,.signature-editor textarea{min-height:92px}
 .signature-preview{max-width:260px;max-height:100px}
 @media(max-width:1050px){.mail-client{grid-template-columns:165px minmax(270px,330px) minmax(0,1fr)}.mail-reader-content{padding:18px}.mail-reader-head{display:grid}.mail-reader-actions{justify-content:flex-start}}
