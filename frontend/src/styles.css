@@ -652,3 +652,21 @@ textarea { min-height: 96px; }
 .frame-work .page.crm .payment-state-deposit_unpaid { background:#d76613 !important;color:#fff !important; }
 .frame-work .page.crm .payment-state-deposit_received { background:#1873c5 !important;color:#fff !important; }
 .frame-work .page.crm .payment-state-paid { background:#278443 !important;color:#fff !important; }
+
+/* Clearer table hierarchy across staff and customer workspaces. */
+.frame-work .page.crm table thead th,
+.frame-portal table thead th {
+  font-size:13px !important;
+  font-weight:750 !important;
+}
+.frame-work .page.crm table thead th button,
+.frame-portal table thead th button {
+  font:inherit;
+  font-size:inherit;
+  font-weight:inherit;
+}
+.frame-work .page.crm table thead th select,
+.frame-portal table thead th select {
+  font-size:11px;
+  font-weight:500;
+}
