@@ -1262,7 +1262,7 @@ def register(app, s):
                         if imported_options.get('opening_style') == 'Close-Sliding':
                             custom_fields.add('opening_style')
                         if (imported_options.get('frame') == 'Track System' and
-                                imported_options.get('opening_style') in {'Tracked by Fold', 'Tracked Sliding'}):
+                                imported_options.get('opening_style') in {'Tracked by Fold', 'Tracked Sliding', 'Close-Sliding'}):
                             custom_fields.add('frame')
                         if custom_fields:
                             rule = {**rule, 'schema': [
