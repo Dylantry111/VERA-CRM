@@ -152,6 +152,42 @@ button:active, .button:active { background: #1f303b; border-color: #1f303b; colo
   white-space: pre-line;
 }
 
+/* Admin workspace brand theme: VERA's deep grey-blue, with saturated workflow badges. */
+.crm {
+  --crm-brand: #405969;
+  --crm-brand-deep: #344a59;
+  --crm-brand-soft: #e8eef2;
+  --crm-ink: #304451;
+  --crm-line: #d6e0e5;
+  background: #f3f6f7 !important;
+  color: var(--crm-ink) !important;
+}
+.crm .top-nav { background: #344956 !important; color: #f2f5f7; }
+.crm .top-nav .account-menu { background: #344956 !important; }
+.crm .top-nav>button.current { background: #536d7d !important; color: #fff; }
+.crm .top-nav>button:hover { background: #526a78 !important; }
+.crm .crm-bar { border-color: var(--crm-line) !important; }
+.crm .page-context strong { color: var(--crm-brand-deep) !important; }
+.crm .crm-bar button, .crm .login button, .crm .password-form button, .crm .user-form button {
+  background: var(--crm-brand) !important; border-color: var(--crm-brand) !important; color: #fff !important; border-radius: 999px !important;
+}
+.crm button:hover { filter: brightness(1.08); }
+.crm button:active { filter: brightness(.9); }
+.crm :deep(input:focus-visible), .crm :deep(select:focus-visible), .crm :deep(textarea:focus-visible) { outline-color: var(--crm-brand) !important; }
+.crm .order-progress-pill, .crm .payment-progress-pill { border-radius: 999px; font-weight: 750; }
+.crm .order-state-draft { background:#697883 !important; color:#fff !important; }
+.crm .order-state-pending_review { background:#ef8700 !important; color:#fff !important; }
+.crm .order-state-accepted { background:#7955d9 !important; color:#fff !important; }
+.crm .order-state-supplier_ordered { background:#345fe0 !important; color:#fff !important; }
+.crm .order-state-in_transit { background:#1286bf !important; color:#fff !important; }
+.crm .order-state-ready { background:#008f80 !important; color:#fff !important; }
+.crm .order-state-complete { background:#278443 !important; color:#fff !important; }
+.crm .payment-state-deposit_unpaid { background:#d76613 !important; color:#fff !important; }
+.crm .payment-state-deposit_received { background:#1873c5 !important; color:#fff !important; }
+.crm .payment-state-paid { background:#278443 !important; color:#fff !important; }
+.crm .overview-statuses button[aria-pressed="true"] { background:var(--crm-brand) !important; color:#fff !important; }
+.crm .order-overview .overview-order-link { color:var(--crm-brand-deep) !important; }
+
 .frame-work .page h1 {
   font-size: clamp(28px, 3vw, 40px);
   max-width: none;
@@ -576,3 +612,43 @@ textarea { min-height: 96px; }
 .frame-work .crm h2 { line-height:1.4; }
 .frame-work .crm p { line-height:1.55; }
 .frame-work .crm button { min-height:44px!important; }
+
+/* Keep every staff workspace on the VERA grey-blue palette. */
+.frame-work .page.crm { background:#f3f6f7 !important; color:#304451 !important; }
+.frame-work .page.crm .card,
+.frame-work .page.crm .section-card,
+.frame-work .page.crm .overview-card,
+.frame-work .page.crm .panel { border-color:#d6e0e5; }
+.frame-work .page.crm .desk button:not(.secondary):not(.overview-order-link):not(.sort-heading),
+.frame-work .page.crm .profiles button:not(.secondary),
+.frame-work .page.crm .dashboard-title button {
+  border-color:#405969; background:#405969; color:#fff;
+}
+.frame-work .page.crm .desk button.secondary,
+.frame-work .page.crm .profiles button.secondary {
+  border-color:#b9c8d0; background:#fff; color:#40515c;
+}
+.frame-work .page.crm .desk button:hover,
+.frame-work .page.crm .profiles button:hover { filter:brightness(1.08); }
+.frame-work .page.crm .desk .section-tabs button.active,
+.frame-work .page.crm .desk .detail-tabs button.active,
+.frame-work .page.crm .desk .fin-tabs button.active {
+  border-color:#b6c8d2; background:#e7eef2; color:#344956;
+}
+.frame-work .page.crm .desk .overview-statuses button[aria-pressed="true"] {
+  border-color:#405969; background:#405969; color:#fff;
+}
+.frame-work .page.crm .desk .overview-order-link,
+.frame-work .page.crm .desk a,
+.frame-work .page.crm .profiles a { color:#405969 !important; }
+.frame-work .page.crm input[type="checkbox"] { accent-color:#405969; }
+.frame-work .page.crm .order-state-draft { background:#697883 !important;color:#fff !important; }
+.frame-work .page.crm .order-state-pending_review { background:#ef8700 !important;color:#fff !important; }
+.frame-work .page.crm .order-state-accepted { background:#7955d9 !important;color:#fff !important; }
+.frame-work .page.crm .order-state-supplier_ordered { background:#345fe0 !important;color:#fff !important; }
+.frame-work .page.crm .order-state-in_transit { background:#1286bf !important;color:#fff !important; }
+.frame-work .page.crm .order-state-ready { background:#008f80 !important;color:#fff !important; }
+.frame-work .page.crm .order-state-complete { background:#278443 !important;color:#fff !important; }
+.frame-work .page.crm .payment-state-deposit_unpaid { background:#d76613 !important;color:#fff !important; }
+.frame-work .page.crm .payment-state-deposit_received { background:#1873c5 !important;color:#fff !important; }
+.frame-work .page.crm .payment-state-paid { background:#278443 !important;color:#fff !important; }

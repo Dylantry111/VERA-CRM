@@ -347,7 +347,7 @@ th, .crm strong, .crm b { font-weight: var(--fw-emphasis); }
   .page-context h1 { font-size: var(--fs-title); line-height: var(--lh-title); }
 }
 
-.crm { font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f3f6f4; }
+.crm { font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f3f6f7; }
 .crm :deep(*) { box-sizing: border-box; }
 .crm :deep(h1), .crm :deep(h2), .crm :deep(h3), .crm :deep(h4) { font-family: inherit; letter-spacing: -.015em; }
 .crm :deep(button), .crm :deep(input), .crm :deep(select), .crm :deep(textarea) { font-family: inherit; }
@@ -383,15 +383,15 @@ th, .crm strong, .crm b { font-weight: var(--fw-emphasis); }
 @media(max-width:600px) { .crm .crm-bar { margin-bottom: 12px; } }
 .desk-rail .rail-mobile-toggle{display:none}
 @media(max-width:800px){.desk-rail .rail-mobile-toggle{display:flex;grid-column:1/-1}.desk-rail:not(.mobile-open)>button:not(.rail-mobile-toggle){display:none}.desk-rail{margin-bottom:10px!important}}
-.crm.is-signed,.crm.is-signed.rail-collapsed { padding: 18px clamp(14px, 2vw, 32px) 36px; }
-.top-nav { display:flex; align-items:center; gap:4px; min-height:60px; padding:8px 10px; margin:-18px calc(-1 * clamp(14px, 2vw, 32px)) 18px; background:#19392d; color:#e7eee9; overflow-x:auto; }
+.crm.is-signed,.crm.is-signed.rail-collapsed { padding: 18px clamp(14px, 2vw, 32px) 36px; background:#f3f6f7; color:#304451; }
+.top-nav { display:flex; align-items:center; gap:4px; min-height:60px; padding:8px 10px; margin:-18px calc(-1 * clamp(14px, 2vw, 32px)) 18px; background:#344956; color:#f2f5f7; overflow-x:auto; }
 .top-nav .crm-brand { display:flex; flex:0 0 auto; align-items:center; justify-content:center; width:132px; min-height:44px; margin-right:8px; padding:4px 7px; border-radius:5px; background:#f8f8f4; }
 .top-nav .crm-brand img { display:block; width:100%; max-height:40px; object-fit:contain; }
 .top-nav>button { flex:0 0 auto; display:flex; align-items:center; justify-content:center; gap:8px; min-height:44px; padding:8px 11px; border:0; border-radius:7px; background:transparent; color:inherit; font-size:13px; white-space:nowrap; }
 .top-nav>button:hover { background:#ffffff18; }
-.top-nav>button.current { background:#315844; color:white; }
+.top-nav>button.current { background:#536d7d; color:white; }
 .top-nav .nav-brand { margin-right:auto; padding-inline:14px; font-size:16px; letter-spacing:.16em; font-weight:700; }
-.top-nav .account-menu { margin-left:auto; position:sticky; right:0; background:#19392d; }
+.top-nav .account-menu { margin-left:auto; position:sticky; right:0; background:#344956; }
 .top-nav .account-menu summary>span { background:#e4eee7; }
 .crm-bar { min-height:38px; padding-bottom:8px; margin-bottom:16px; }
 @media(max-width:800px) { .crm.is-signed,.crm.is-signed.rail-collapsed { padding:12px; } .top-nav { margin:-12px -12px 14px; gap:2px; } .top-nav .crm-brand { width:110px; margin-right:4px; } .top-nav>button { padding:8px; } .top-nav>button span { font-size:12px; } }

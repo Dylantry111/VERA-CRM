@@ -991,7 +991,35 @@ class MailboxSend(Input):
     cc: str = Field(default='', max_length=2000)
     subject: str = Field(min_length=1, max_length=500)
     body: str = Field(min_length=1, max_length=100000)
+    html_body: str | None = Field(default=None, max_length=1500000)
     reply_to: str = Field(default='', max_length=500)
+
+
+class MailTemplate(Input):
+    id: str = Field(min_length=1, max_length=60, pattern=r'^[a-zA-Z0-9_-]+$')
+    name: str = Field(min_length=1, max_length=120)
+    subject: str = Field(default='', max_length=500)
+    body: str = Field(default='', max_length=15000)
+
+
+class MailboxPreferencesEdit(Input):
+    templates: list[MailTemplate] = Field(default_factory=list, max_length=30)
+    signature_text: str = Field(default='', max_length=10000)
+    signature_image_data: str = Field(default='', max_length=1500000)
+
+    @field_validator('signature_image_data')
+    @classmethod
+    def valid_signature_image(cls, value):
+        if value and not re.fullmatch(r'data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+', value):
+            raise ValueError('Signature image must be a PNG, JPEG or WebP image')
+        return value
+
+    @model_validator(mode='after')
+    def unique_mail_templates(self):
+        ids = [template.id for template in self.templates]
+        if len(ids) != len(set(ids)):
+            raise ValueError('Email template IDs must be unique')
+        return self
 
 
 class ManualItem(Input):
@@ -2136,6 +2164,24 @@ def register(app, s):
                 'provider': 'Titan', 'encryption_key_configured': key_configured,
                 'imap_host': 'imap.titan.email', 'imap_port': 993, 'smtp_host': 'smtp.titan.email', 'smtp_port': 465}
 
+    @app.get('/api/operations/mailbox/preferences')
+    def mailbox_preferences(actor=Depends(s.require_admin)):
+        with s.db() as c:
+            row = c.execute("SELECT data FROM operations_records WHERE id='mailbox-preferences'").fetchone()
+        if not row:
+            return {'templates': [], 'signature_text': '', 'signature_image_data': ''}
+        saved = json.loads(row['data'])
+        return {key: saved.get(key, default) for key, default in {
+            'templates': [], 'signature_text': '', 'signature_image_data': ''}.items()}
+
+    @app.post('/api/operations/mailbox/preferences')
+    def save_mailbox_preferences(body: MailboxPreferencesEdit, actor=Depends(s.require_admin)):
+        saved = {**body.model_dump(mode='json'), 'id': 'mailbox-preferences', 'updated_at': s.now(), 'updated_by': actor}
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            put(c, 'setting', saved)
+        return {key: saved[key] for key in ('templates', 'signature_text', 'signature_image_data')}
+
     @app.post('/api/operations/mailbox/connect')
     def connect_mailbox(body: MailboxConnect, actor=Depends(s.require_admin)):
         from email_service import address
@@ -2256,7 +2302,7 @@ def register(app, s):
             email_address, password = saved_mailbox(c)
         try:
             message_id = mailbox_service.send(email_address, password, ', '.join(recipients), body.subject.strip(),
-                                              body.body, ', '.join(carbon), body.reply_to)
+                                              body.body, ', '.join(carbon), body.reply_to, body.html_body)
             return {'sent': True, 'message_id': message_id}
         except mailbox_service.MailboxError as exc:
             raise HTTPException(502, str(exc)) from None

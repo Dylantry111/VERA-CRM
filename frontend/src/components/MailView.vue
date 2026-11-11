@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { request, session } from "../crm-api";
-import { Mail, RefreshCw, PenLine, Archive, Trash2, Reply, Paperclip, X } from "lucide-vue-next";
+import { Mail, RefreshCw, PenLine, Archive, Trash2, Reply, Paperclip, X, Settings, Plus, UserRound, ImagePlus, Save } from "lucide-vue-next";
 
 const { locale } = useI18n();
 const tx = (zh: string, en: string) => locale.value === "zh" ? zh : en;
@@ -11,6 +11,9 @@ type MailFolder = { name: string; role: string };
 type MailRow = { uid: string; from: string; to: string; subject: string; date: string; message_id: string; unread: boolean };
 type MailAttachment = { part: number; filename: string; content_type: string };
 type MailMessage = MailRow & { cc: string; in_reply_to: string; body: string; attachments: MailAttachment[] };
+type MailTemplate = { id: string; name: string; subject: string; body: string };
+type MailPreferences = { templates: MailTemplate[]; signature_text: string; signature_image_data: string };
+type Customer = { customer_id: number; company: string; contact_name: string; email: string; customer_type?: string };
 const status = ref<MailStatus | null>(null);
 const folders = ref<MailFolder[]>([]);
 const rows = ref<MailRow[]>([]);
@@ -22,6 +25,17 @@ const busy = ref(false);
 const error = ref("");
 const notice = ref("");
 const setup = reactive({ email: "Dylan@verashading.com", app_password: "" });
+const customers = ref<Customer[]>([]);
+const customerSearch = ref("");
+const selectedCustomerIds = ref<number[]>([]);
+const preferences = ref<MailPreferences>({ templates: [], signature_text: "", signature_image_data: "" });
+const settingsOpen = ref(false);
+const templateDraft = reactive({ id: "", name: "", subject: "", body: "" });
+const templateSelected = ref("");
+const imageInput = ref<HTMLInputElement | null>(null);
+const messagePurpose = ref("existing_notice");
+const consentConfirmed = ref(false);
+const consentSource = ref("");
 const composeOpen = ref(false);
 const compose = reactive({ to: "", cc: "", subject: "", body: "", reply_to: "" });
 const visibleRows = computed(() => {
@@ -31,13 +45,82 @@ const visibleRows = computed(() => {
 const unreadCount = computed(() => rows.value.filter(row => row.unread).length);
 const archiveFolder = computed(() => folders.value.find(folder => folder.role === "archive" || /archive/i.test(folder.name))?.name || "");
 const selectedIsUnread = computed(() => rows.value.find(row => row.uid === message.value?.uid)?.unread ?? false);
+const visibleCustomers = computed(() => {
+  const term = customerSearch.value.trim().toLowerCase();
+  return customers.value.filter(row => row.email && (!term || `${row.company} ${row.contact_name} ${row.email}`.toLowerCase().includes(term)));
+});
 
 async function loadStatus() {
   error.value = "";
   try {
     status.value = await request<MailStatus>("operations/mailbox");
-    if (status.value.connected) await loadFolders();
+    if (status.value.connected) {
+      await Promise.all([loadFolders(), loadMailPreferences(), loadCustomers()]);
+    }
   } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
+}
+
+async function loadCustomers() {
+  try { customers.value = (await request<Customer[]>("operations/customers")).filter(row => !row.customer_type || row.customer_type === "wholesale"); }
+  catch { customers.value = []; }
+}
+
+async function loadMailPreferences() {
+  try { preferences.value = await request<MailPreferences>("operations/mailbox/preferences"); }
+  catch { preferences.value = { templates: [], signature_text: "", signature_image_data: "" }; }
+}
+
+function toggleCustomerRecipient(customer: Customer) {
+  selectedCustomerIds.value = selectedCustomerIds.value.includes(customer.customer_id)
+    ? selectedCustomerIds.value.filter(id => id !== customer.customer_id)
+    : [...selectedCustomerIds.value, customer.customer_id];
+  compose.to = customers.value.filter(row => selectedCustomerIds.value.includes(row.customer_id)).map(row => row.email).join(", ");
+}
+
+function loadTemplate(id: string) {
+  const template = preferences.value.templates.find(row => row.id === id);
+  if (!template) return;
+  compose.subject = template.subject;
+  compose.body = template.body;
+}
+
+function editTemplate(id = "") {
+  const template = preferences.value.templates.find(row => row.id === id);
+  Object.assign(templateDraft, template || { id: crypto.randomUUID(), name: "", subject: "", body: "" });
+}
+
+async function saveTemplate() {
+  if (!templateDraft.name.trim()) return;
+  const next = { ...templateDraft, id: templateDraft.id || crypto.randomUUID() };
+  const existing = preferences.value.templates.findIndex(row => row.id === next.id);
+  if (existing >= 0) preferences.value.templates.splice(existing, 1, next);
+  else preferences.value.templates.push(next);
+  await saveMailPreferences();
+}
+
+async function saveMailPreferences() {
+  busy.value = true; error.value = ""; notice.value = "";
+  try {
+    preferences.value = await request<MailPreferences>("operations/mailbox/preferences", preferences.value);
+    notice.value = tx("邮件模板与签名已保存。", "Email templates and signature saved.");
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
+  finally { busy.value = false; }
+}
+
+function readSignatureImage(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 1024 * 1024) {
+    error.value = tx("请使用不超过 1 MB 的 PNG、JPEG 或 WebP 图片。", "Choose a PNG, JPEG or WebP image under 1 MB.");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => { preferences.value.signature_image_data = String(reader.result || ""); };
+  reader.readAsDataURL(file);
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char] || char));
 }
 
 async function loadFolders() {
@@ -101,15 +184,38 @@ function openCompose(reply = false) {
   compose.subject = reply && message.value ? (/^re:/i.test(message.value.subject) ? message.value.subject : `Re: ${message.value.subject}`) : "";
   compose.body = reply && message.value ? `\n\n--- ${tx("原邮件","Original message")} ---\n${message.value.body}` : "";
   compose.reply_to = reply ? message.value?.in_reply_to || "" : "";
+  selectedCustomerIds.value = [];
+  customerSearch.value = "";
+  messagePurpose.value = "existing_notice";
+  consentConfirmed.value = false;
+  consentSource.value = "";
+  templateSelected.value = "";
   composeOpen.value = true;
 }
 
 async function sendMessage() {
   busy.value = true; error.value = ""; notice.value = "";
   try {
-    await request("operations/mailbox/send", { ...compose });
+    const recipients = [...new Set(compose.to.split(/[,;\s]+/).map(value => value.trim()).filter(Boolean))];
+    if (!recipients.length) throw new Error(tx("请选择至少一位收件人。", "Choose at least one recipient."));
+    if (recipients.length > 1 && compose.cc.trim()) throw new Error(tx("为保护收件人隐私，逐封发送时请清空 CC。", "Clear CC when sending separately to multiple recipients."));
+    const commercial = messagePurpose.value !== "existing_notice";
+    if (commercial && (!consentConfirmed.value || !consentSource.value.trim())) {
+      throw new Error(tx("商业邮件需要确认收件人同意，并记录同意依据。", "Commercial email requires confirmed recipient consent and a recorded consent source."));
+    }
+    const unsubscribe = commercial ? `<p style=\"font-size:12px;color:#687984\">To stop receiving further commercial emails, reply to <a href=\"mailto:${escapeHtml(status.value?.email || '')}?subject=UNSUBSCRIBE\">the sender</a> with UNSUBSCRIBE.</p>` : "";
+    const signatureText = preferences.value.signature_text.split(/\r?\n/).map(escapeHtml).join("<br>");
+    const signatureImage = preferences.value.signature_image_data ? `<p><img src=\"${preferences.value.signature_image_data}\" alt=\"VERA Shading Solutions\" style=\"max-width:240px;max-height:90px\"></p>` : "";
+    const signatureHtml = signatureText || signatureImage ? `<div style=\"margin-top:20px;padding-top:12px;border-top:1px solid #d6e0e5\">${signatureText ? `<p>${signatureText}</p>` : ""}${signatureImage}</div>` : "";
+    const plainBody = [compose.body, preferences.value.signature_text, commercial ? `To stop receiving further commercial emails, reply to ${status.value?.email || 'the sender'} with UNSUBSCRIBE.` : ""].filter(Boolean).join("\n\n");
+    const htmlBody = `<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#304451\">${escapeHtml(compose.body).replace(/\r?\n/g, "<br>")}${signatureHtml}${unsubscribe}</div>`;
+    let sentCount = 0;
+    for (const recipient of recipients) {
+      await request("operations/mailbox/send", { ...compose, body: plainBody, to: recipient, cc: recipients.length > 1 ? "" : compose.cc, html_body: htmlBody });
+      sentCount++;
+    }
     composeOpen.value = false;
-    notice.value = tx("邮件已发送。","Email sent.");
+    notice.value = tx(`已分别发送 ${sentCount} 封邮件。`, `${sentCount} individual email(s) sent.`);
     const sent = folders.value.find(folder => folder.role === "sent");
     if (sent) { activeFolder.value = sent.name; await loadMessages(); }
   } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
@@ -166,7 +272,7 @@ onMounted(() => void loadStatus());
 
 <template>
   <section class="mail-workspace">
-    <header class="mail-page-head"><div><p class="eyebrow">VERA · COMMUNICATIONS</p><h1>{{ tx("邮件","Mail") }}</h1><p>{{ tx("在后台查看并管理企业邮箱。","View and manage your business mailbox from the admin workspace.") }}</p></div><div v-if="status?.connected" class="mail-head-actions"><span class="connected-pill">{{ status.email }}</span><button type="button" class="mail-icon-button" :disabled="loading" :aria-label="tx('刷新邮件','Refresh mail')" @click="loadMessages"><RefreshCw :size="16" /></button><button type="button" class="mail-primary" @click="openCompose()"><PenLine :size="15" /> {{ tx("写邮件","Compose") }}</button></div></header>
+    <header class="mail-page-head"><div><p class="eyebrow">VERA · COMMUNICATIONS</p><h1>{{ tx("邮件","Mail") }}</h1><p>{{ tx("在后台查看并管理企业邮箱。","View and manage your business mailbox from the admin workspace.") }}</p></div><div v-if="status?.connected" class="mail-head-actions"><span class="connected-pill">{{ status.email }}</span><button type="button" class="mail-icon-button" :disabled="loading" :aria-label="tx('刷新邮件','Refresh mail')" @click="loadMessages"><RefreshCw :size="16" /></button><button type="button" class="mail-icon-button" :aria-label="tx('邮件模板与签名设置','Email template and signature settings')" @click="settingsOpen=true;editTemplate(templateSelected)"><Settings :size="16" /> {{ tx('邮件设置','Mail settings') }}</button><button type="button" class="mail-primary" @click="openCompose()"><PenLine :size="15" /> {{ tx("写邮件","Compose") }}</button></div></header>
     <p v-if="error" class="mail-error" role="alert">{{ error }}</p><p v-if="notice" class="mail-notice" role="status">{{ notice }}</p>
     <section v-if="!status?.connected" class="mail-connect-card">
       <div class="mail-connect-icon"><Mail :size="22" /></div><h2>{{ tx("连接 Titan 邮箱","Connect Titan mailbox") }}</h2><p>{{ tx("已识别邮箱地址 Dylan@verashading.com。连接后，后台会直接从 Titan 同步文件夹和邮件。","Mailbox address identified as Dylan@verashading.com. Once connected, folders and emails are read directly from Titan.") }}</p>
@@ -179,12 +285,24 @@ onMounted(() => void loadStatus());
       <div class="mail-message-list"><div class="mail-list-toolbar"><h2>{{ folderLabel(folders.find(folder=>folder.name===activeFolder) || {name:activeFolder,role:'folder'}) }}</h2><input v-model="search" :placeholder="tx('搜索邮件','Search mail')" /><span>{{ visibleRows.length }}</span></div><button v-for="row in visibleRows" :key="row.uid" type="button" class="mail-row" :class="{ selected: message?.uid===row.uid, unread: row.unread }" @click="openMessage(row)"><span class="mail-row-from">{{ row.from }}</span><strong>{{ row.subject || tx("（无主题）","(no subject)") }}</strong><small>{{ row.date }}</small></button><p v-if="!loading && !visibleRows.length" class="mail-empty-list">{{ tx("此文件夹没有邮件。","No emails in this folder.") }}</p></div>
       <main class="mail-reader"><div v-if="message" class="mail-reader-content"><header class="mail-reader-head"><div><h2>{{ message.subject || tx("（无主题）","(no subject)") }}</h2><p><strong>{{ message.from }}</strong><br>{{ tx("收件人","To") }}: {{ message.to }}<span v-if="message.cc"><br>CC: {{ message.cc }}</span><br>{{ message.date }}</p></div><div class="mail-reader-actions"><button v-if="archiveFolder" type="button" :disabled="busy" :title="tx('归档','Archive')" @click="moveToArchive"><Archive :size="16" /></button><button type="button" :disabled="busy" :title="tx('标为已读/未读','Toggle read status')" @click="toggleRead">{{ selectedIsUnread ? tx("标为已读","Mark read") : tx("标为未读","Mark unread") }}</button><button type="button" :disabled="busy" :title="tx('删除','Delete')" @click="deleteMessage"><Trash2 :size="16" /></button><button type="button" :disabled="busy" @click="openCompose(true)"><Reply :size="15" /> {{ tx("回复","Reply") }}</button></div></header><div v-if="message.attachments.length" class="mail-attachments"><button v-for="attachment in message.attachments" :key="attachment.part" type="button" @click="downloadAttachment(attachment)"><Paperclip :size="14" /> {{ attachment.filename }}</button></div><pre class="mail-body">{{ message.body || tx("此邮件没有可显示的纯文本正文。","No plain text body is available for this email.") }}</pre></div><div v-else class="mail-reader-empty"><Mail :size="28" /><span>{{ tx("选择一封邮件查看内容","Select an email to read") }}</span></div></main>
     </section>
-    <div v-if="composeOpen" class="compose-backdrop" @click.self="composeOpen=false"><form class="compose-card" @submit.prevent="sendMessage"><header><h2>{{ tx("新邮件","New email") }}</h2><button type="button" :aria-label="tx('关闭','Close')" @click="composeOpen=false"><X :size="18" /></button></header><label>{{ tx("收件人","To") }}<input v-model.trim="compose.to" placeholder="customer@example.com" required /></label><label>CC<input v-model.trim="compose.cc" /></label><label>{{ tx("主题","Subject") }}<input v-model.trim="compose.subject" required maxlength="500" /></label><textarea v-model="compose.body" rows="12" required></textarea><footer><span>{{ status?.email }}</span><button type="submit" class="mail-primary" :disabled="busy">{{ busy ? tx("发送中…","Sending…") : tx("发送","Send") }}</button></footer></form></div>
+    <div v-if="composeOpen" class="compose-backdrop" @click.self="composeOpen=false"><form class="compose-card" @submit.prevent="sendMessage"><header><div><p class="compose-eyebrow">VERA · MAIL</p><h2>{{ tx("新邮件","New email") }}</h2></div><button type="button" :aria-label="tx('关闭','Close')" @click="composeOpen=false"><X :size="18" /></button></header>
+      <label>{{ tx("邮件用途","Purpose") }}<select v-model="messagePurpose"><option value="existing_notice">{{ tx("现有客户业务通知（不含推广）","Existing customer service notice (non-promotional)") }}</option><option value="commercial_update">{{ tx("现有客户产品/价格推广","Product or price promotion to customers") }}</option><option value="first_contact">{{ tx("首次产品联系","First product outreach") }}</option></select></label>
+      <section class="recipient-picker"><label><UserRound :size="15" /> {{ tx("从批发客户中筛选","Choose wholesale customers") }}<input v-model="customerSearch" :placeholder="tx('搜索公司、联系人或邮箱','Search company, contact or email')" /></label><div class="recipient-options"><label v-for="customer in visibleCustomers" :key="customer.customer_id" class="recipient-option"><input type="checkbox" :checked="selectedCustomerIds.includes(customer.customer_id)" @change="toggleCustomerRecipient(customer)" /><span><strong>{{ customer.company }}</strong><small>{{ customer.contact_name }} · {{ customer.email }}</small></span></label><p v-if="!visibleCustomers.length" class="mail-help">{{ tx('没有匹配的客户邮箱。也可以直接输入邮箱地址。','No matching customer emails. You can also enter email addresses manually.') }}</p></div></section>
+      <label>{{ tx("收件人（可粘贴多个邮箱；会逐封发送）","To (paste multiple addresses; each receives a separate email)") }}<input v-model.trim="compose.to" placeholder="customer@example.com" required /></label>
+      <label>CC<input v-model.trim="compose.cc" :placeholder="tx('单个收件人时可用','Available for one recipient')" /></label>
+      <label v-if="preferences.templates.length">{{ tx("套用邮件模板","Email template") }}<select v-model="templateSelected" @change="loadTemplate(templateSelected)"><option value="">{{ tx('不套用模板','No template') }}</option><option v-for="template in preferences.templates" :key="template.id" :value="template.id">{{ template.name }}</option></select></label>
+      <label>{{ tx("主题","Subject") }}<input v-model.trim="compose.subject" required maxlength="500" /></label><label>{{ tx("邮件内容","Message") }}<textarea v-model="compose.body" rows="9" required></textarea></label>
+      <section v-if="messagePurpose !== 'existing_notice'" class="consent-check"><label><input v-model="consentConfirmed" type="checkbox" required />{{ tx("我已核实收件人同意接收此类商业邮件","I have verified recipient consent for this commercial email") }}</label><label>{{ tx("同意依据/来源","Consent basis/source") }}<input v-model.trim="consentSource" :placeholder="tx('例如：客户申请、网站勾选或相关业务公开邮箱','e.g. customer request, website opt-in or relevant published business address')" required /></label><small>{{ tx("商业邮件会附带退订说明，并逐个地址单独发送。","Commercial email includes an unsubscribe instruction and is sent separately to each address.") }}</small></section>
+      <footer><span>{{ status?.email }} · {{ compose.to.split(/[,;\s]+/).filter(Boolean).length }} {{ tx('位收件人','recipient(s)') }}</span><button type="submit" class="mail-primary" :disabled="busy">{{ busy ? tx("发送中…","Sending…") : tx("逐封发送","Send individually") }}</button></footer></form></div>
+    <div v-if="settingsOpen" class="compose-backdrop" @click.self="settingsOpen=false"><form class="compose-card mail-settings-card" @submit.prevent="saveMailPreferences"><header><div><p class="compose-eyebrow">VERA · BRAND VOICE</p><h2>{{ tx("邮件模板与签名","Email templates & signature") }}</h2></div><button type="button" :aria-label="tx('关闭','Close')" @click="settingsOpen=false"><X :size="18" /></button></header>
+      <section class="template-editor"><h3>{{ tx("邮件模板","Email templates") }}</h3><div class="template-actions"><select v-model="templateSelected" @change="editTemplate(templateSelected)"><option value="">{{ tx('选择现有模板','Choose a template') }}</option><option v-for="template in preferences.templates" :key="template.id" :value="template.id">{{ template.name }}</option></select><button type="button" class="mail-icon-button" @click="templateSelected='';editTemplate()"><Plus :size="15" /> {{ tx('新模板','New template') }}</button></div><label>{{ tx("模板名称","Template name") }}<input v-model="templateDraft.name" required /></label><label>{{ tx("主题","Subject") }}<input v-model="templateDraft.subject" maxlength="500" /></label><label>{{ tx("正文","Message") }}<textarea v-model="templateDraft.body" rows="5"></textarea></label><button type="button" class="mail-icon-button" :disabled="busy || !templateDraft.name.trim()" @click="saveTemplate"><Save :size="15" /> {{ tx('保存模板','Save template') }}</button></section>
+      <section class="signature-editor"><h3>{{ tx("发送签名","Signature") }}</h3><label>{{ tx("签名文字","Signature text") }}<textarea v-model="preferences.signature_text" rows="4" placeholder="Name · VERA Shading Solutions · Contact details"></textarea></label><input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="readSignatureImage" /><button type="button" class="mail-icon-button" @click="imageInput?.click()"><ImagePlus :size="15" /> {{ tx('添加 Logo 图片','Add logo image') }}</button><img v-if="preferences.signature_image_data" class="signature-preview" :src="preferences.signature_image_data" alt="Email signature image preview" /><button type="submit" class="mail-primary" :disabled="busy">{{ busy ? tx('保存中…','Saving…') : tx('保存邮件设置','Save mail settings') }}</button></section>
+    </form></div>
   </section>
 </template>
 
 <style scoped>
-.mail-workspace{display:grid;gap:15px;min-height:calc(100dvh - 150px);color:#24372d}.mail-page-head{display:flex;align-items:center;justify-content:space-between;gap:18px}.mail-page-head .eyebrow{margin:0 0 4px;color:#668171;font-size:10px;font-weight:750;letter-spacing:.14em}.mail-page-head h1{margin:0;font-size:24px}.mail-page-head p:not(.eyebrow){margin:5px 0 0;color:#6c7a72;font-size:12px}.mail-head-actions{display:flex;align-items:center;gap:8px}.connected-pill{max-width:250px;overflow:hidden;text-overflow:ellipsis;color:#61746a;font-size:12px}.mail-icon-button,.mail-reader-actions button,.compose-card header button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:7px 10px;border:1px solid #d8e2da;border-radius:999px;background:#fff;color:#345744;cursor:pointer}.mail-primary{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:38px;padding:8px 15px;border:1px solid #3d715c;border-radius:999px;background:#3d715c;color:white;font-size:12px;font-weight:700;cursor:pointer}.mail-primary:disabled,.mail-reader-actions button:disabled{opacity:.55;cursor:wait}.mail-error,.mail-notice{margin:0;padding:10px 13px;border-radius:7px;font-size:12px}.mail-error{background:#fff0ed;color:#8d3729}.mail-notice{background:#edf5ef;color:#286044}.mail-connect-card{width:min(520px,100%);box-sizing:border-box;align-self:start;justify-self:center;margin:auto;padding:25px;border:1px solid #dbe5dd;border-radius:12px;background:#fff;box-shadow:0 12px 35px #1a39200d}.mail-connect-icon{display:grid;place-items:center;width:44px;height:44px;border-radius:50%;background:#eaf3ed;color:#37664d}.mail-connect-card h2{margin:14px 0 5px;font-size:19px}.mail-connect-card>p{margin:0 0 17px;color:#697a70;font-size:12px;line-height:1.55}.mail-connect-card form{display:grid;gap:11px}.mail-connect-card label,.compose-card label{display:grid;gap:5px;color:#4c6255;font-size:11px;font-weight:700}.mail-connect-card input,.compose-card input,.compose-card textarea{box-sizing:border-box;width:100%;min-height:38px;padding:8px 10px;border:1px solid #d2ddd4;border-radius:6px;background:#fff;color:#25392e;font:inherit;font-size:13px}.mail-key-notice{display:grid;gap:5px;margin:12px 0;padding:11px;border-radius:7px;background:#fff4df;color:#795515;font-size:11px;line-height:1.45}.mail-help{margin:0;color:#718078;font-size:10px;line-height:1.45}.mail-client{display:grid;grid-template-columns:155px minmax(250px,330px) minmax(300px,1fr);min-height:0;height:calc(100dvh - 205px);border:1px solid #dbe4dd;border-radius:10px;overflow:hidden;background:#fff}.mail-sidebar{display:flex;flex-direction:column;gap:4px;padding:12px 8px;border-right:1px solid #e6ece7;background:#f8faf8}.mail-folder{display:flex;align-items:center;gap:9px;width:100%;min-height:37px;padding:8px 10px;border:0;border-radius:999px;background:transparent;color:#566a5d;text-align:left;font-size:11px;cursor:pointer}.mail-folder span{flex:1}.mail-folder b{color:#3e7055;font-size:10px}.mail-folder.active{background:#e5efe8;color:#20573a;font-weight:700}.disconnect-link{margin-top:auto;padding:8px;border:0;background:none;color:#8a5148;text-align:left;font-size:10px;cursor:pointer}.mail-message-list{min-width:0;overflow:auto;border-right:1px solid #e6ece7}.mail-list-toolbar{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:10px;background:#fff;border-bottom:1px solid #e6ece7}.mail-list-toolbar h2{flex:1;min-width:0;margin:0;font-size:13px}.mail-list-toolbar input{width:130px;min-width:70px;height:30px;box-sizing:border-box;padding:5px 8px;border:1px solid #dce4dd;border-radius:999px;font-size:10px}.mail-list-toolbar>span{color:#758279;font-size:10px}.mail-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 8px;width:100%;padding:11px 12px;border:0;border-bottom:1px solid #eff2ef;background:#fff;color:#32463a;text-align:left;cursor:pointer}.mail-row:hover,.mail-row.selected{background:#f1f6f2}.mail-row.unread strong,.mail-row.unread .mail-row-from{font-weight:750;color:#244a34}.mail-row-from{grid-column:1;overflow:hidden;color:#586d60;text-overflow:ellipsis;white-space:nowrap;font-size:10px}.mail-row strong{grid-column:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.mail-row small{grid-column:2;grid-row:1/3;color:#849188;font-size:9px;white-space:nowrap}.mail-empty-list{padding:18px;color:#7b8980;font-size:11px;text-align:center}.mail-reader{min-width:0;overflow:auto}.mail-reader-content{padding:18px 21px}.mail-reader-head{display:flex;justify-content:space-between;gap:14px;padding-bottom:13px;border-bottom:1px solid #e7ece8}.mail-reader-head h2{margin:0 0 9px;font-size:17px;overflow-wrap:anywhere}.mail-reader-head p{margin:0;color:#64736a;font-size:10px;line-height:1.7;overflow-wrap:anywhere}.mail-reader-actions{display:flex;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end;gap:5px}.mail-reader-actions button{min-height:31px;padding:5px 8px;font-size:10px;white-space:nowrap}.mail-attachments{display:flex;flex-wrap:wrap;gap:6px;margin:13px 0}.mail-attachments button{display:flex;align-items:center;gap:5px;padding:7px 9px;border:1px solid #dbe4dd;border-radius:999px;background:#f8faf8;color:#365943;font-size:10px;cursor:pointer}.mail-body{margin:16px 0;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.65 Arial,sans-serif;color:#34483a}.mail-reader-empty{display:grid;place-content:center;justify-items:center;gap:10px;height:100%;color:#86938b;font-size:12px}.compose-backdrop{position:fixed;inset:0;z-index:1100;display:grid;place-items:center;padding:15px;background:#15271dcc}.compose-card{display:grid;gap:11px;width:min(650px,96vw);max-height:92dvh;overflow:auto;padding:18px;border-radius:12px;background:#fff;box-shadow:0 20px 60px #06190e55}.compose-card header,.compose-card footer{display:flex;align-items:center;justify-content:space-between;gap:10px}.compose-card h2{margin:0;font-size:17px}.compose-card textarea{resize:vertical;min-height:180px}.compose-card footer span{overflow:hidden;color:#728078;text-overflow:ellipsis;font-size:10px}.compose-card footer .mail-primary{margin-left:auto}.compose-card header button{min-width:34px;min-height:34px;padding:6px}
+.mail-workspace{color:#344956}.mail-page-head .eyebrow{color:#6a7c88}.connected-pill{color:#607582}.mail-icon-button,.mail-reader-actions button,.compose-card header button{border-color:#d6e0e5;color:#405969}.mail-primary{border-color:#405969;background:#405969}.mail-notice{background:#e8f2f5;color:#355c70}.mail-connect-icon{background:#e8eef2;color:#405969}.mail-folder.active{background:#e4edf2;color:#344956}.mail-folder b{color:#405969}.compose-backdrop{background:#263945bb}.compose-card{width:min(740px,96vw);color:#304451}.compose-card input,.compose-card textarea,.compose-card select{border-color:#d3dfe5;color:#304451}.compose-eyebrow{margin:0 0 3px;color:#738792;font-size:9px;letter-spacing:.15em}.recipient-picker,.consent-check,.template-editor,.signature-editor{display:grid;gap:8px;padding:10px;border:1px solid #dce5e9;border-radius:8px;background:#f8fafb}.recipient-picker>label{display:flex;align-items:center;gap:6px}.recipient-options{display:grid;gap:2px;max-height:150px;overflow:auto}.recipient-option{display:grid!important;grid-template-columns:20px minmax(0,1fr);align-items:center;gap:8px!important;margin:0!important;padding:6px;border-bottom:1px solid #e5ecef}.recipient-option input,.consent-check input{width:16px!important;min-height:16px!important;margin:0!important;accent-color:#405969}.recipient-option span{display:grid;gap:1px;min-width:0}.recipient-option strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#344956}.recipient-option small{overflow:hidden;color:#71818a;text-overflow:ellipsis;white-space:nowrap;font-size:10px}.consent-check label{display:grid;grid-template-columns:20px 1fr;align-items:center;gap:7px;margin:0}.consent-check small{color:#6f808b;font-size:10px}.compose-card footer span{color:#687b86}.mail-settings-card{width:min(680px,96vw)}.mail-settings-card h3{margin:0;font-size:14px}.template-actions{display:flex;gap:8px}.template-actions select{flex:1}.template-editor>label,.signature-editor>label{display:grid;gap:4px;color:#4d6470;font-size:11px;font-weight:700}.template-editor textarea,.signature-editor textarea{min-height:85px}.signature-preview{max-width:240px;max-height:90px;object-fit:contain;border:1px solid #dbe4e9;border-radius:5px;background:white;padding:5px}
 @media(max-width:900px){.mail-client{grid-template-columns:130px minmax(220px,35%) minmax(300px,1fr)}.mail-reader-head{display:grid}.mail-reader-actions{justify-content:flex-start}}
 @media(max-width:700px){.mail-workspace{min-height:calc(100dvh - 110px)}.mail-page-head{align-items:flex-start;flex-direction:column}.mail-head-actions{width:100%;flex-wrap:wrap}.mail-client{height:auto;min-height:75dvh;grid-template-columns:110px minmax(0,1fr);grid-template-rows:minmax(240px,45dvh) minmax(300px,1fr)}.mail-sidebar{grid-column:1;grid-row:1/3}.mail-message-list{grid-column:2;grid-row:1;border-right:0;border-bottom:1px solid #e6ece7}.mail-reader{grid-column:2;grid-row:2}.mail-reader-content{padding:13px}.mail-list-toolbar input{width:100px}.mail-connect-card{margin-top:10px;padding:18px}}
 </style>

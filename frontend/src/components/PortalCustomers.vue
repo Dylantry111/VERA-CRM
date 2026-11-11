@@ -74,8 +74,8 @@ const filteredRows = computed(() => {
   const term = search.value.trim().toLowerCase();
   return rows.value.filter(
     (r) =>
-      (typeFilter.value === "all" || typeOf(r) === typeFilter.value) &&
-      `${r.company} ${r.username} ${r.contact_name} ${r.customer_code || ""}`.toLowerCase().includes(term),
+      typeOf(r) === "wholesale" &&
+      `${r.company} ${r.username} ${r.contact_name} ${r.phone} ${r.email} ${r.customer_code || ""}`.toLowerCase().includes(term),
   );
 });
 const customerPage = ref(0);
@@ -116,7 +116,8 @@ const detailTab = ref("profile");
 const editing = ref(false);
 const usage = ref<CompanyUse | null>(null);
 const detailEl = ref<HTMLElement | null>(null);
-const draft = reactive({ company: "", contact_name: "", email: "", phone: "", company_address: "", customer_type: "wholesale" as CustomerType, customer_code: "" });
+const customerEditDialog = ref<HTMLDialogElement | null>(null);
+const draft = reactive({ company: "", contact_name: "", email: "", phone: "", company_address: "", customer_type: "wholesale" as CustomerType, customer_code: "", finance_email: "", finance_phone: "" });
 
 async function load() {
   rows.value = await request<PortalCustomer[]>("operations/customers");
@@ -156,6 +157,8 @@ function fillDraft(row: PortalCustomer) {
     company_address: row.company_address,
     customer_type: typeOf(row),
     customer_code: row.customer_code || "",
+    finance_email: row.finance_email || "",
+    finance_phone: row.finance_phone || "",
   });
 }
 
@@ -196,9 +199,17 @@ async function save() {
     notice.value = tx("客户资料已更新。", "Customer profile updated.");
     editing.value = false;
     await load();
+    customerEditDialog.value?.close();
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause);
   }
+}
+
+async function editCustomer(row: PortalCustomer) {
+  await choose(row);
+  startEdit();
+  await nextTick();
+  customerEditDialog.value?.showModal();
 }
 </script>
 
@@ -254,7 +265,25 @@ async function save() {
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>
 
-    <div class="customer-layout">
+    <div class="customer-table-wrap">
+      <input v-model="search" type="search" class="customer-search" :placeholder="tx('搜索公司、联系人、电话、邮箱或代码','Search company, contact, phone, email or code')" :aria-label="tx('搜索客户','Search customers')" />
+      <p v-if="loading" class="hint">{{ tx('加载客户中…','Loading customers…') }}</p>
+      <div v-else class="customer-table-scroll"><table class="customer-table"><thead><tr><th>{{ tx('公司','Company') }}</th><th>{{ tx('联系人','Contact') }}</th><th>{{ tx('电话','Phone') }}</th><th>{{ tx('邮箱','Email') }}</th><th>{{ tx('批发代码','Code') }}</th><th>{{ tx('地址','Address') }}</th><th>{{ tx('门户','Portal') }}</th><th></th></tr></thead><tbody>
+        <tr v-for="row in filteredRows" :key="row.customer_id"><td><strong>{{ row.company }}</strong></td><td>{{ row.contact_name || '—' }}</td><td>{{ row.phone || '—' }}</td><td>{{ row.email || '—' }}</td><td>{{ row.customer_code || '—' }}</td><td>{{ row.company_address || '—' }}</td><td><span :class="['customer-login-state', loginActive(row) ? 'active' : 'inactive']">{{ loginActive(row) ? tx('已开通','Active') : tx('未开通','Inactive') }}</span></td><td><button type="button" class="customer-edit-button" @click="editCustomer(row)">{{ tx('编辑','Edit') }}</button></td></tr>
+        <tr v-if="!filteredRows.length"><td colspan="8" class="customer-no-rows">{{ tx('没有匹配的客户','No matching customers') }}</td></tr>
+      </tbody></table></div>
+    </div>
+    <dialog ref="customerEditDialog" class="customer-edit-dialog" @click.self="customerEditDialog?.close()">
+      <form v-if="current" class="panel" @submit.prevent="save"><header class="edit-dialog-head"><div><small>{{ tx('批发客户资料','WHOLESALE CUSTOMER') }}</small><h3>{{ current.company }}</h3></div><button type="button" class="secondary" :aria-label="tx('关闭','Close')" @click="customerEditDialog?.close()">×</button></header>
+        <div class="form-grid">
+          <label>{{ tx('公司','Company') }}<input v-model="draft.company" required /></label><label>{{ tx('批发代码','Wholesale code') }}<input v-model="draft.customer_code" maxlength="50" /></label>
+          <label>{{ tx('联系人','Contact') }}<input v-model="draft.contact_name" /></label><label>{{ tx('电话','Phone') }}<input v-model="draft.phone" /></label>
+          <label>{{ tx('邮箱','Email') }}<input v-model="draft.email" type="email" /></label><label>{{ tx('财务邮箱','Finance email') }}<input v-model="draft.finance_email" type="email" /></label>
+          <label>{{ tx('财务电话','Finance phone') }}<input v-model="draft.finance_phone" /></label><label class="wide">{{ tx('公司地址','Company address') }}<input v-model="draft.company_address" /></label>
+        </div><div class="actions"><button type="submit">{{ tx('保存','Save') }}</button><button type="button" class="secondary" @click="customerEditDialog?.close()">{{ tx('取消','Cancel') }}</button></div>
+      </form>
+    </dialog>
+    <div class="customer-layout legacy">
       <aside class="customer-list" :aria-label="tx('客户列表', 'Customer list')">
         <input v-model="search" type="search" :placeholder="tx('搜索公司、联系人、账号或代码', 'Search company, contact, login or code')" :aria-label="tx('搜索客户', 'Search customers')" />
         <div class="filter-row" role="tablist">
@@ -497,4 +526,6 @@ legend { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
   .line-list li .muted { grid-column: 1 / -1; grid-row: 2; }
 }
 .application-inbox{display:grid;gap:10px;padding:16px;border:1px solid #d4dee1;border-radius:12px;background:#f4f7f7}.email-prerequisite{margin:0;padding:9px 11px;border-radius:5px;background:#fff5e8;color:#81521a;font-size:12px}.inbox-head{display:flex;align-items:center;justify-content:space-between}.inbox-head h3{margin:0;font-size:16px}.inbox-head p{margin:3px 0 0;color:#61727a;font-size:12px}.application-count{display:grid;place-items:center;min-width:24px;height:24px;padding:0 6px;border-radius:50px;background:#435a67;color:#fff;font-size:12px;font-weight:700}.application-card{display:grid;gap:12px;padding:14px;border:1px solid #d7e0e2;border-radius:8px;background:#fff}.application-top{display:flex;align-items:center;justify-content:space-between;gap:12px}.application-top h4{margin:0}.application-top button{min-height:36px;padding:7px 12px;background:#435a67;color:#fff;border:1px solid #435a67;border-radius:6px;font-weight:650}.application-top button:disabled{opacity:.55}.application-facts{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;color:#4d6069;font-size:12px}.application-facts span{display:grid;gap:3px}.application-facts strong,.application-products>strong{color:#31454f;font-size:10px;text-transform:uppercase;letter-spacing:.04em}.application-products{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;padding-top:9px;border-top:1px solid #e8edef;font-size:12px}.application-products>strong{width:100%}.application-products span{padding:5px 8px;border-radius:999px;background:#edf2f3;color:#3f5661}.application-notes{font-size:12px;color:#61727a}@media(max-width:700px){.application-top{align-items:flex-start;flex-direction:column}.application-facts{grid-template-columns:1fr}}
+.customer-layout.legacy{display:none}.profiles-head>div>.meta{display:none}.create-panel fieldset{display:none}
+.customer-table-wrap{display:grid;gap:10px;padding:14px;border:1px solid #dbe3e7;border-radius:12px;background:#fff}.customer-search{width:min(420px,100%);margin:0!important}.customer-table-scroll{overflow:auto}.customer-table{width:100%;min-width:860px;border-collapse:collapse;font-size:12px}.customer-table th,.customer-table td{padding:9px 10px;text-align:left;border-bottom:1px solid #e8edf0;vertical-align:middle}.customer-table th{position:sticky;top:0;background:#f5f8f9;color:#566b77;font-size:10px;white-space:nowrap}.customer-table td{color:#344a57}.customer-table td strong{color:#2f4654}.customer-table td:nth-child(6){max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.customer-login-state{display:inline-block;padding:3px 8px;border-radius:999px;font-size:10px;font-weight:700}.customer-login-state.active{background:#d9f3e5;color:#12613a}.customer-login-state.inactive{background:#ffe2df;color:#a42d24}.profiles .customer-edit-button{min-height:30px;padding:4px 10px;border-radius:999px;background:#405969;color:white;font-size:11px}.customer-no-rows{text-align:center!important;color:#778690!important}.customer-edit-dialog{width:min(700px,94vw);max-height:90dvh;padding:0;border:0;border-radius:12px;box-shadow:0 18px 60px #15263055}.customer-edit-dialog::backdrop{background:#1f303bb5}.customer-edit-dialog .panel{border:0;border-radius:12px}.edit-dialog-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.edit-dialog-head h3{margin:2px 0}.edit-dialog-head small{color:#6a7d87;letter-spacing:.1em;font-size:9px}.edit-dialog-head button{min-width:34px!important;width:34px!important;padding:0!important}
 </style>

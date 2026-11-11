@@ -629,6 +629,7 @@ async function act(fn: () => Promise<void>) {
 }
 
 function review(id: string) {
+  const fromDashboard = route.query.source === 'dashboard';
   return act(async () => {
     const order = orders.value.find((item) => item.id === id);
     const body = order?.order_number_confirmed === false
@@ -636,6 +637,8 @@ function review(id: string) {
       : {};
     await request(`operations/orders/${id}/review`, body);
     notice.value = tx("已确认接收。定金发票是草稿，发送是另一步。价格未配置时会拒绝。", "Accepted. The deposit invoice is a draft; sending it is a separate step. This is refused when price rules are missing.");
+  }).then(() => {
+    if (fromDashboard && !error.value) void router.push('/crm/dashboard');
   });
 }
 
