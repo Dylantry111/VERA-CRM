@@ -6,6 +6,7 @@ import { request, session } from "../crm-api";
 import ProductWorkspace from "../components/ProductWorkspace.vue";
 import IntegrationStatus from "../components/IntegrationStatus.vue";
 import ProjectDesk from "../components/ProjectDesk.vue";
+import AccountingWorkspace from "../components/AccountingWorkspace.vue";
 import SampleDashboard from "../components/SampleDashboard.vue";
 import PortalCustomers from "../components/PortalCustomers.vue";
 import CrmGuide from "../components/CrmGuide.vue";
@@ -54,7 +55,7 @@ const nav = computed(() => [
   { key: "customers", label: tx("Customer", "Customer"), badge: pendingTradeApplications.value },
   { key: "mail", label: tx("邮件", "Mail") },
   { key: "providers", label: tx("Supplier", "Supplier") },
-  { key: "finance", label: tx("Accounts and Rebates", "Accounts and Rebates") },
+  { key: "finance", label: tx("Accounting", "Accounting") },
   { key: "products", label: tx("Product", "Product") },
   { key: "help", label: tx("Operating Guide", "Operating Guide") },
   { key: "users", label: tx("Settings", "Settings") },
@@ -214,7 +215,8 @@ onMounted(() => {
         <label>{{ tx("再输入一次", "Repeat the new password") }}<input v-model="passwordForm.confirm" type="password" autocomplete="new-password" minlength="8" required /></label>
         <button :disabled="busy">{{ tx("保存密码", "Save password") }}</button>
       </form>
-      <ProjectDesk v-if="['projects','shipments','providers','finance'].includes(tab)" :key="tab" :workspace="tab" :email-enabled="emailEnabled" :email-mode="emailMode" :admin="me.role === 'admin'" />
+      <ProjectDesk v-if="['projects','shipments','providers'].includes(tab)" :key="tab" :workspace="tab" :email-enabled="emailEnabled" :email-mode="emailMode" :admin="me.role === 'admin'" />
+      <AccountingWorkspace v-if="tab === 'finance'" :key="tab" :admin="me.role === 'admin'" :email-enabled="emailEnabled" :email-mode="emailMode" />
       <CrmGuide v-if="tab==='help'" :demo="emailMode!=='live'" :delivery-enabled="emailEnabled" />
       <PortalCustomers v-if="tab === 'customers'" :admin="me.role === 'admin'" :email-enabled="emailEnabled" :email-mode="emailMode" @applications-updated="refreshTradeApplicationCount" />
       <MailView v-if="tab === 'mail' && me.role === 'admin'" />

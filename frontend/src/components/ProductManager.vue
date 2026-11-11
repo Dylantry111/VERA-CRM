@@ -1,163 +1,159 @@
 <script setup lang="ts">
-import {ref,reactive,computed,onMounted,onBeforeUnmount,nextTick} from 'vue';
-import {useI18n} from 'vue-i18n';
-import {request} from '../crm-api';
-import ProductPicture from './ProductPicture.vue';
-import {materialPhoto,type ApiProduct} from '../api';
-const props=defineProps<{admin:boolean}>();const emit=defineEmits<{updated:[];pricing:[code:string]}>();
-const {locale}=useI18n();const tx=(z:string,e:string)=>locale.value==='zh'?z:e;
-type Product=ApiProduct&{published:boolean;image_url:string;image_urls:string[];unit:string;width_min:number|null;width_max:number|null;height_min:number|null;height_max:number|null;colors:string[];controls:string[]};
-const products=ref<Product[]>([]),query=ref(''),chosen=ref<number|null>(null),busy=ref(false),error=ref(''),notice=ref(''),adding=ref(false);
-const blank=()=>({name_zh:'',name_en:'',material_zh:'',material_en:'',description_zh:'',description_en:'',category:'aluminium',image_url:'',image_urls:[] as string[],sample:true,published:false,unit:'mm',width_min:null as number|null,width_max:null as number|null,height_min:null as number|null,height_max:null as number|null});
-const form=reactive(blank()),colors=ref(''),controls=ref(''),maxImageBytes=ref(5*1024*1024);
-const filtered=computed(()=>products.value.filter(p=>[p.name_en,p.name_zh,p.category].join(' ').toLowerCase().includes(query.value.toLowerCase())));
-const chosenProduct=computed(()=>products.value.find(p=>p.id===chosen.value));
-const previewIndex=ref(0);
-const preview=computed(()=>form.image_urls[previewIndex.value]||form.image_urls[0]||form.image_url||'');
-function cover(index:number){const [url]=form.image_urls.splice(index,1);form.image_urls.unshift(url);form.image_url=url;previewIndex.value=0}
-function removeImage(index:number){form.image_urls.splice(index,1);form.image_url=form.image_urls[0]||'';previewIndex.value=0}
-function choose(p:Product){previewIndex.value=0;chosen.value=p.id;adding.value=false;Object.assign(form,blank(),p,{image_urls:[...(p.image_urls||[])]});colors.value=p.colors.join(', ');controls.value=p.controls.join(', ');error.value='';notice.value=''}
-function add(){previewIndex.value=0;chosen.value=null;adding.value=true;Object.assign(form,blank());colors.value='';controls.value='';notice.value='';error.value=''}
-async function load(){const [items,config]=await Promise.all([request<Product[]>('admin/products'),request<{max_bytes:number}>('admin/image-upload-config')]);products.value=items;maxImageBytes.value=config.max_bytes;if(!adding.value&&chosen.value!=null){const p=products.value.find(p=>p.id===chosen.value);if(p)choose(p);else chosen.value=null}}
-async function save(){busy.value=true;error.value='';try{const values={...form,image_url:form.image_urls[0]||'',width_min:form.width_min==null||String(form.width_min)===''?null:Number(form.width_min),width_max:form.width_max==null||String(form.width_max)===''?null:Number(form.width_max),height_min:form.height_min==null||String(form.height_min)===''?null:Number(form.height_min),height_max:form.height_max==null||String(form.height_max)===''?null:Number(form.height_max),colors:colors.value.split(/[,，\n]/).map(s=>s.trim()).filter(Boolean),controls:controls.value.split(/[,，\n]/).map(s=>s.trim()).filter(Boolean)};const p=await request<Product>(chosen.value?`admin/products/${chosen.value}`:'admin/products',values);chosen.value=p.id;adding.value=false;await load();notice.value=tx('已保存。官网重新加载后显示同一产品资料。','Saved. Reload the website to see the same product details.');emit('updated')}catch(e){error.value=e instanceof Error?e.message:String(e)}finally{busy.value=false}}
-async function upload(event:Event){const input=event.target as HTMLInputElement,files=Array.from(input.files||[]);if(!files.length)return;if(form.image_urls.length+files.length>12){error.value=tx('最多12张图片。','Up to 12 images.');input.value='';return}if(files.some(file=>file.size>maxImageBytes.value||!['image/png','image/jpeg','image/webp'].includes(file.type))){error.value=tx(`每张请选择${maxImageBytes.value/1024/1024}MB以内PNG、JPEG或WebP。`,`Each image must be PNG, JPEG or WebP, up to ${maxImageBytes.value/1024/1024} MB.`);input.value='';return}busy.value=true;error.value='';try{for(const file of files){const data=await new Promise<string>((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]);r.onerror=()=>reject(new Error('Image could not be read'));r.readAsDataURL(file)});const result=await request<{image_url:string}>('admin/product-images',{data,content_type:file.type});form.image_urls.push(result.image_url);form.image_url=form.image_urls[0]}notice.value=tx('图片已加入图集，保存产品后应用。','Images added to the gallery. Save the product to apply them.')}catch(e){error.value=e instanceof Error?e.message:String(e)}finally{busy.value=false;input.value=''}}
+import { computed, onMounted, reactive, ref } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { request } from '../crm-api';
+import type { ApiProduct } from '../api';
 
-const open=computed(()=>chosen.value!=null||adding.value);
-const drawer=ref<HTMLElement|null>(null);
-function close(){chosen.value=null;adding.value=false;error.value='';notice.value=''}
-function pick(p:Product){choose(p);nextTick(()=>drawer.value?.focus())}
-function create(){add();nextTick(()=>drawer.value?.focus())}
-function range(p:Product,min:number|null,max:number|null){if(min==null&&max==null)return '—';return `${min??'?'} – ${max??'?'}`}
-const stats=computed(()=>({total:products.value.length,live:products.value.filter(p=>p.published).length}));
-function onKey(e:KeyboardEvent){if(e.key==='Escape'&&open.value&&!busy.value)close()}
-onMounted(async()=>{window.addEventListener('keydown',onKey);try{await load()}catch(e){error.value=e instanceof Error?e.message:String(e)}});
-onBeforeUnmount(()=>window.removeEventListener('keydown',onKey));
-</script>
-<template>
-<div class="pm">
-<header class="pm-head">
-  <div><p class="pm-eyebrow">VERA · {{tx('产品目录','CATALOGUE')}}</p><h2>{{tx('产品目录','Product catalogue')}}</h2><p class="pm-sub">{{tx('官网与报价共用同一份资料；修改展示信息不会改动已保存订单的价格。','The website and quotes share these records. Editing display details never changes saved order prices.')}}</p></div>
-  <div class="pm-tools"><div class="pm-count" aria-live="polite"><strong>{{stats.total}}</strong><span>{{tx('个产品','products')}}</span><i></i><strong>{{stats.live}}</strong><span>{{tx('官网展示中','live')}}</span></div>
-  <label class="pm-search"><span class="sr">{{tx('搜索产品','Search products')}}</span><input v-model="query" type="search" :placeholder="tx('搜索名称或分类','Search name or category')"/></label>
-  <button v-if="admin" type="button" class="pm-primary" :disabled="busy" @click="create">＋ {{tx('新增产品','Add product')}}</button></div>
-</header>
-<p v-if="error&&!open" class="alert" role="alert">{{error}}</p>
+const props = defineProps<{ admin: boolean }>();
+const emit = defineEmits<{ updated: [] }>();
+const { locale } = useI18n();
+const tx = (zh: string, en: string) => locale.value === 'zh' ? zh : en;
+type Product = ApiProduct & { published: boolean; orderable?: boolean; product_category?: string; pricing_method?: 'per_sqm' | 'matrix'; pricing_matrix?: Record<string, Record<string, string>>; image_url?: string; image_urls?: string[]; unit?: 'mm' | 'inch'; colors?: string[]; controls?: string[] };
+type Knowledge = { current?: { products?: any[]; order_minimum_area?: string | number; installation_per_panel?: string | number; minimum_installation?: string | number }; facts?: any[] };
+const products = ref<Product[]>([]);
+const categories = ref<string[]>(['Interior shutters', 'Interior blinds', 'Exterior shutters', 'Exterior blinds']);
+const knowledge = ref<Knowledge>({});
+const search = ref('');
+const categoryFilter = ref('');
+const selected = ref<Product | null>(null);
+const adding = ref(false);
+const categoryEditorOpen = ref(false);
+const draftCategories = ref<string[]>([]);
+const newCategory = ref('');
+const busy = ref(false);
+const loading = ref(true);
+const error = ref('');
+const notice = ref('');
+const price = reactive({ rate_per_m2: '', minimum_area: '', order_minimum_area: '', installation_per_panel: '', minimum_installation: '' });
+const form = reactive({ id: 0, name_en: '', material_en: '', product_category: 'Interior shutters', description_en: '', pricing_method: 'per_sqm' as 'per_sqm' | 'matrix', pricing_matrix: {} as Record<string, Record<string, string>>, published: false, orderable: false, sample: false });
+const widths = Array.from({ length: 25 }, (_, index) => 600 + index * 100);
+const heights = Array.from({ length: 20 }, (_, index) => 600 + index * 100);
+const internalCategory = computed(() => form.product_category.toLowerCase().includes('blind') ? 'blinds' : 'shutters');
+const visibleProducts = computed(() => products.value.filter(p => !(p.category === 'blinds' && !p.published && p.source_code)));
+const filteredProducts = computed(() => visibleProducts.value.filter(p =>
+  (!categoryFilter.value || (p.product_category || '').toLowerCase() === categoryFilter.value.toLowerCase()) &&
+  `${p.name_en} ${p.material_en} ${p.product_category || ''}`.toLowerCase().includes(search.value.toLowerCase().trim())
+));
+const activeRule = (code?: string) => knowledge.value.current?.products?.find((row: any) => row.source_code === code);
+const shutters = computed(() => internalCategory.value === 'shutters');
+const priceChanged = computed(() => {
+  const rule = activeRule(selected.value?.source_code);
+  const current = knowledge.value.current;
+  if (!rule || !current) return false;
+  return String(rule.rate_per_m2 ?? '') !== price.rate_per_m2 || String(rule.minimum_area ?? '') !== price.minimum_area ||
+    String(current.order_minimum_area ?? '') !== price.order_minimum_area || String(current.installation_per_panel ?? '') !== price.installation_per_panel ||
+    String(current.minimum_installation ?? '') !== price.minimum_installation;
+});
 
-<ul class="pm-grid" v-if="filtered.length">
-  <li v-for="p in filtered" :key="p.id">
-    <button type="button" class="pm-card" :class="{current:chosen===p.id}" @click="pick(p)" :aria-label="tx(`编辑 ${p.name_zh}`,`Edit ${p.name_en}`)">
-      <span class="pm-cover"><ProductPicture :src="materialPhoto(p)" :alt="locale==='zh'?p.name_zh:p.name_en"/><span class="pm-chip" :class="p.published?'on':'off'">{{p.published?tx('官网展示','Live'):tx('未展示','Hidden')}}</span><span v-if="p.sample" class="pm-chip sample">{{tx('示例','Sample')}}</span></span>
-      <span class="pm-body">
-        <strong>{{locale==='zh'?p.name_zh:p.name_en}}</strong>
-        <small>{{locale==='zh'?p.material_zh:p.material_en}} · #{{p.id}}</small>
-        <span class="pm-specs"><span><em>{{tx('宽','W')}}</em>{{range(p,p.width_min,p.width_max)}}</span><span><em>{{tx('高','H')}}</em>{{range(p,p.height_min,p.height_max)}}</span><span class="unit">{{p.unit||'mm'}}</span></span>
-        <span class="pm-tags"><span v-for="c in (p.colors||[]).slice(0,3)" :key="c">{{c}}</span><span v-if="(p.colors||[]).length>3" class="more">+{{p.colors.length-3}}</span><span v-if="!(p.colors||[]).length" class="none">{{tx('未设置颜色','No colours set')}}</span></span>
-      </span>
-    </button>
-  </li>
-</ul>
-<p v-else class="pm-empty">{{tx('没有匹配的产品','No matching products')}}</p>
-
-<div v-if="open" class="pm-backdrop" @click="close" aria-hidden="true"></div>
-<aside v-if="open" ref="drawer" class="pm-drawer" role="dialog" aria-modal="true" :aria-label="adding?tx('新增产品','Add product'):tx('编辑产品','Edit product')" tabindex="-1">
-  <header class="pm-drawer-head"><div><p class="pm-eyebrow">{{adding?tx('新产品','NEW PRODUCT'):`PRODUCT #${chosen}`}} · {{admin?tx('管理员可编辑','Administrator access'):tx('销售只读','Read-only for sales')}}</p><h3>{{adding?tx('新增产品','Add product'):(locale==='zh'?form.name_zh:form.name_en)}}</h3></div><button type="button" class="pm-close" @click="close" :aria-label="tx('关闭','Close')">✕</button></header>
-  <p v-if="error" class="alert" role="alert">{{error}}</p><p v-if="notice" class="success" role="status">{{notice}}</p>
-  <form @submit.prevent="save" class="pm-form">
-    <section class="pm-sec"><h4><b>1</b>{{tx('图片','Images')}}</h4>
-      <div class="pm-stage"><ProductPicture v-if="preview" :src="preview" :alt="locale==='zh'?form.name_zh:form.name_en"/><span v-else class="pm-noimg">{{tx('还没有图片','No image yet')}}</span></div>
-      <div class="pm-thumbs"><article v-for="(url,index) in form.image_urls" :key="url" :class="{active:previewIndex===index}"><button type="button" class="pm-thumb" :aria-label="tx(`预览第${index+1}张产品图`,`Preview product image ${index+1}`)" :aria-pressed="previewIndex===index" @click="previewIndex=index"><ProductPicture :src="url" alt=""/></button><small>{{index===0?tx('封面','Cover'):index+1}}</small><div v-if="admin"><button v-if="index>0" type="button" class="pm-mini" @click="cover(index)">{{tx('设为封面','Set cover')}}</button><button type="button" class="pm-mini danger" @click="removeImage(index)" :aria-label="tx(`移除第${index+1}张图片`,`Remove image ${index+1}`)">{{tx('移除','Remove')}}</button></div></article></div>
-      <label v-if="admin" class="pm-upload"><span>＋ {{tx('添加产品图片','Add product images')}}</span><small>{{tx(`PNG / JPEG / WebP · 最大${maxImageBytes/1024/1024}MB · 最多12张`,`PNG / JPEG / WebP · up to ${maxImageBytes/1024/1024} MB · max 12`)}}</small><input type="file" multiple accept="image/png,image/jpeg,image/webp" @change="upload" :disabled="busy"/></label>
-    </section>
-    <section class="pm-sec"><h4><b>2</b>{{tx('基本资料','Details')}}</h4>
-      <div class="pm-pair"><label>{{tx('中文名称','Chinese name')}}<input v-model="form.name_zh" required maxlength="160" :readonly="!admin"/></label><label>{{tx('英文名称','English name')}}<input v-model="form.name_en" required maxlength="160" :readonly="!admin"/></label></div>
-      <div class="pm-pair"><label>{{tx('中文材质','Material in Chinese')}}<input v-model="form.material_zh" required maxlength="100" :readonly="!admin"/></label><label>{{tx('英文材质','Material in English')}}<input v-model="form.material_en" required maxlength="100" :readonly="!admin"/></label></div>
-      <label>{{tx('分类','Category')}}<select v-model="form.category" :disabled="!admin"><option value="aluminium">{{tx('铝百叶','Aluminium blinds')}}</option><option value="timber">{{tx('木百叶','Timber blinds')}}</option><option value="composite">{{tx('复合百叶','Composite blinds')}}</option><option value="other">{{tx('其他','Other')}}</option></select></label>
-      <div class="pm-toggles"><label class="pm-toggle"><input type="checkbox" v-model="form.published" :disabled="!admin"/><span>{{tx('在官网展示','Show on website')}}</span></label><label class="pm-toggle"><input type="checkbox" v-model="form.sample" :disabled="!admin"/><span>{{tx('示例产品','Sample product')}}</span></label></div>
-    </section>
-    <section class="pm-sec"><h4><b>3</b>{{tx('描述','Description')}}</h4>
-      <div class="pm-pair"><label>{{tx('中文描述','Chinese description')}}<textarea v-model="form.description_zh" maxlength="3000" :readonly="!admin"/></label><label>{{tx('英文描述','English description')}}<textarea v-model="form.description_en" maxlength="3000" :readonly="!admin"/></label></div>
-    </section>
-    <section class="pm-sec"><h4><b>4</b>{{tx('规格范围','Size range')}}</h4>
-      <div class="pm-dims"><label>{{tx('单位','Unit')}}<select v-model="form.unit" :disabled="!admin"><option>mm</option><option>inch</option></select></label><label>{{tx('最小宽度','Minimum width')}}<input v-model.number="form.width_min" type="number" min="0.01" step="any" :readonly="!admin"/></label><label>{{tx('最大宽度','Maximum width')}}<input v-model.number="form.width_max" type="number" min="0.01" step="any" :readonly="!admin"/></label><label>{{tx('最小高度','Minimum height')}}<input v-model.number="form.height_min" type="number" min="0.01" step="any" :readonly="!admin"/></label><label>{{tx('最大高度','Maximum height')}}<input v-model.number="form.height_max" type="number" min="0.01" step="any" :readonly="!admin"/></label></div>
-      <div class="pm-pair"><label>{{tx('可选颜色 · 用逗号分隔','Colour options · separate with commas')}}<input v-model="colors" :readonly="!admin"/></label><label>{{tx('控制方式 · 用逗号分隔','Controls · separate with commas')}}<input v-model="controls" :readonly="!admin"/></label></div>
-      <p class="pm-hint">{{tx('范围可留空，实际项目规格与单价在报价中确认。修改目录不改变历史报价和订单。','Ranges may be left blank. Confirm project specifications and pricing in the quote. Catalogue changes do not alter past quotes or orders.')}}</p>
-    </section>
-  <footer class="pm-save"><button v-if="admin && chosenProduct?.source_code" type="button" class="pm-ghost" @click="emit('pricing',chosenProduct.source_code!)">{{tx('编辑价格与计算','Edit pricing & calculation')}}</button><button v-if="admin" type="submit" class="pm-primary" :disabled="busy">{{busy?tx('保存中…','Saving…'):tx('保存产品','Save product')}}</button><button type="button" class="pm-ghost" @click="close" :disabled="busy">{{admin?tx('取消','Cancel'):tx('关闭','Close')}}</button><span v-if="admin">{{form.published?tx('保存后供官网展示','Will be visible on the website'):tx('保存为未展示产品','Will remain hidden from the website')}}</span></footer>
-  </form>
-</aside>
-</div>
-</template>
-<style scoped>
-.pm{display:block;color:#1b2421}
-.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-.pm-eyebrow{margin:0 0 4px;font-size:11px;letter-spacing:.12em;color:#64766b;text-transform:uppercase}
-.pm-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap;padding:4px 0 20px}
-.pm-head h2{margin:0!important;font-size:26px!important;line-height:1.2}
-.pm-sub{margin:6px 0 0;max-width:520px;font-size:13px;line-height:1.6;color:#5d6d63}
-.pm-tools{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.pm-count{white-space:nowrap;display:flex;align-items:baseline;gap:6px;padding:0 14px;height:44px;border-radius:999px;background:#fff;border:1px solid #dfe7e1;font-size:12px;color:#64766b}
-.pm-count strong{font-size:18px;color:#0f6e5c;font-variant-numeric:tabular-nums}.pm-count i{width:1px;height:16px;background:#dfe7e1;align-self:center;margin:0 4px}
-.pm-search input{width:230px;height:44px;border-radius:999px;border:1px solid #dfe7e1;background:#fff;padding:0 16px}
-.pm-primary{min-height:44px;border-radius:999px;padding:0 22px;background:#0f6e5c;border:1px solid #0f6e5c;color:#fff;font-weight:600;cursor:pointer}
-.pm-primary:disabled{opacity:.5;cursor:default}
-.pm-ghost{min-height:44px;border-radius:999px;padding:0 20px;background:#fff;border:1px solid #cddbd1;color:#1b2421;cursor:pointer}
-
-.pm-grid{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:20px}
-.pm-card{width:100%;height:100%;display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start;font-weight:400;padding:0;text-align:left;background:#fff;color:inherit;border:1px solid #e1e8e3;border-radius:16px;overflow:hidden;cursor:pointer;box-shadow:0 1px 2px rgba(27,36,33,.04);transition:transform .18s,box-shadow .18s,border-color .18s}
-.pm-card:hover{transform:translateY(-3px);box-shadow:0 14px 32px rgba(27,36,33,.12);border-color:#b9cfc2}
-.pm-card:focus-visible{outline:3px solid #7fb7a3;outline-offset:2px}.pm-card.current{border-color:#0f6e5c;box-shadow:0 0 0 2px #0f6e5c}
-.pm-cover{position:relative;display:block;aspect-ratio:4/3;background:#edf1ed;overflow:hidden}
-.pm-cover :deep(img){width:100%;height:100%;object-fit:cover;display:block;transition:transform .5s}.pm-card:hover .pm-cover :deep(img){transform:scale(1.04)}
-.pm-cover :deep(.product-picture-placeholder){width:100%;height:100%}
-.pm-chip{position:absolute;top:12px;left:12px;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:600;background:rgba(255,255,255,.92);color:#34503f;backdrop-filter:blur(4px)}
-.pm-chip.on{background:#0f6e5c;color:#fff}.pm-chip.off{background:rgba(27,36,33,.78);color:#fff}.pm-chip.sample{left:auto;right:12px;background:#f2e7d3;color:#7a5a24}
-.pm-body{display:flex;flex-direction:column;gap:6px;padding:16px 18px 18px}
-.pm-body strong{font-size:17px;line-height:1.3}.pm-body small{font-size:12px;color:#64766b}
-.pm-specs{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:6px;padding-top:12px;border-top:1px dashed #dfe7e1;font-size:12.5px;color:#34503f;font-variant-numeric:tabular-nums}
-.pm-specs em{font-style:normal;color:#8a998f;margin-right:6px;font-size:11px}.pm-specs .unit{margin-left:auto;color:#8a998f}
-.pm-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
-.pm-tags span{padding:3px 9px;border-radius:999px;background:#eef4f0;color:#34503f;font-size:11.5px}.pm-tags .more{background:transparent;color:#64766b}.pm-tags .none{background:transparent;color:#9aa89f;padding-left:0}
-.pm-empty{padding:48px 0;text-align:center;color:#64766b}
-
-.pm-backdrop{position:fixed;inset:0;background:rgba(16,28,22,.42);z-index:50;animation:pm-fade .2s}
-.pm-drawer{position:fixed;top:0;right:0;bottom:0;width:min(760px,100vw);z-index:51;display:flex;flex-direction:column;background:#f7f9f8;box-shadow:-20px 0 60px rgba(16,28,22,.25);animation:pm-slide .26s cubic-bezier(.2,.8,.2,1);outline:none}
-@keyframes pm-fade{from{opacity:0}}@keyframes pm-slide{from{transform:translateX(40px);opacity:0}}
-.pm-drawer-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:22px 28px 16px;background:#fff;border-bottom:1px solid #e1e8e3}
-.pm-drawer-head h3{margin:0;font-size:22px;line-height:1.25}
-.pm-close{min-width:44px;min-height:44px;border-radius:50%;border:1px solid #dfe7e1;background:#fff;color:#1b2421;cursor:pointer;padding:0}
-.pm-drawer>.alert,.pm-drawer>.success{margin:12px 28px 0}
-.pm-form{display:flex;flex-direction:column;flex:1;min-height:0;overflow:auto}
-.pm-sec{margin:16px 28px 0;padding:20px 22px;background:#fff;border:1px solid #e1e8e3;border-radius:14px}
-.pm-sec h4{display:flex;align-items:center;gap:10px;margin:0 0 14px;font-size:15px}
-.pm-sec h4 b{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:#0f6e5c;color:#fff;font-size:12px}
-.pm-sec label{display:grid;gap:6px;font-size:13px;color:#34503f;margin-bottom:12px}
-.pm-pair{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
-.pm-dims{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0 12px}
-.pm-sec input,.pm-sec select,.pm-sec textarea{width:100%;min-height:44px;border-radius:10px;border:1px solid #d3ddd6;background:#fff;padding:8px 12px;font:inherit}
-.pm-sec textarea{min-height:120px;resize:vertical}
-.pm-sec input:read-only,.pm-sec textarea:read-only{background:#f3f6f4;color:#4d6256}
-.pm-stage{aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:#edf1ed;display:grid;place-items:center}
-.pm-stage :deep(img){width:100%;height:100%;object-fit:cover;display:block}.pm-noimg{color:#8a998f;font-size:13px}
-.pm-thumbs{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
-.pm-thumbs article{width:104px;padding:5px;border:2px solid transparent;border-radius:12px;background:#f3f6f4}.pm-thumbs article.active{border-color:#0f6e5c;background:#fff}
-.pm-thumb{display:block;width:100%;aspect-ratio:4/3;padding:0;min-height:0;border:0;border-radius:8px;overflow:hidden;background:#edf1ed;cursor:pointer}
-.pm-thumb :deep(img){width:100%;height:100%;object-fit:cover;display:block}
-.pm-thumbs small{display:block;margin:4px 2px;font-size:11px;color:#64766b}.pm-thumbs article>div{display:flex;flex-wrap:wrap;gap:4px}
-.pm-mini{min-height:32px;padding:0 8px;border-radius:8px;border:1px solid #cddbd1;background:#fff;color:#1b2421;font-size:11px;cursor:pointer}.pm-mini.danger{color:#8c2f2f}
-.pm-upload{position:relative;display:grid!important;gap:2px!important;place-items:center;padding:18px;border:2px dashed #b9cfc2;border-radius:12px;background:#f7faf8;cursor:pointer;text-align:center}
-.pm-upload span{font-weight:600;color:#0f6e5c;font-size:14px}.pm-upload small{color:#64766b;font-size:12px}.pm-upload input{position:absolute;inset:0;opacity:0;cursor:pointer;min-height:0;padding:0}
-.pm-toggles{display:flex;gap:12px;flex-wrap:wrap}
-.pm-toggle{display:flex!important;align-items:center;grid-template-columns:none;gap:10px!important;padding:0 16px;min-height:44px;border:1px solid #d3ddd6;border-radius:999px;background:#fff;cursor:pointer;margin:0!important}
-.pm-toggle input{width:18px;height:18px;min-height:18px;margin:0;accent-color:#0f6e5c}
-.pm-hint{margin:0;font-size:12px;line-height:1.6;color:#64766b}
-.pm-save{position:sticky;bottom:0;margin-top:20px;padding:14px 28px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:#fff;border-top:1px solid #e1e8e3;box-shadow:0 -8px 24px rgba(16,28,22,.06)}
-.pm-save span{font-size:12px;color:#64766b}
-
-@media(max-width:800px){
-  .pm-head{align-items:stretch}.pm-tools{width:100%}.pm-search{flex:1 1 100%}.pm-search input{width:100%}.pm-count{order:2}.pm-tools .pm-primary{order:3;flex:1}
-  .pm-grid{grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
-  .pm-drawer{width:100vw}.pm-drawer-head{padding:16px}.pm-drawer>.alert,.pm-drawer>.success{margin:12px 16px 0}
-  .pm-sec{margin:12px 12px 0;padding:16px}.pm-pair{grid-template-columns:1fr}.pm-dims{grid-template-columns:1fr 1fr}.pm-save{padding:12px 16px}
+function fillPrice(product?: Product | null) {
+  const rule = activeRule(product?.source_code);
+  const current = knowledge.value.current;
+  price.rate_per_m2 = String(rule?.rate_per_m2 ?? product?.['rate_per_m2' as keyof Product] ?? '');
+  price.minimum_area = String(rule?.minimum_area ?? '0.5');
+  price.order_minimum_area = String(current?.order_minimum_area ?? '1');
+  price.installation_per_panel = String(current?.installation_per_panel ?? '');
+  price.minimum_installation = String(current?.minimum_installation ?? '150');
 }
-@media(prefers-reduced-motion:reduce){.pm-card,.pm-card:hover,.pm-cover :deep(img),.pm-drawer,.pm-backdrop{transition:none;animation:none;transform:none}}
+function startEdit(product: Product) {
+  selected.value = product; adding.value = false; error.value = ''; notice.value = '';
+  Object.assign(form, { id: product.id, name_en: product.name_en || '', material_en: product.material_en || '', product_category: product.product_category || (product.category === 'blinds' ? 'Interior blinds' : 'Interior shutters'), description_en: product.description_en || '', pricing_method: product.pricing_method || (product.category === 'blinds' ? 'matrix' : 'per_sqm'), pricing_matrix: structuredClone(product.pricing_matrix || {}), published: !!product.published, orderable: !!product.orderable, sample: !!product.sample });
+  fillPrice(product);
+}
+function startNew() {
+  selected.value = null; adding.value = true; error.value = ''; notice.value = '';
+  Object.assign(form, { id: 0, name_en: '', material_en: '', product_category: categories.value[0] || 'Interior shutters', description_en: '', pricing_method: 'per_sqm', pricing_matrix: {}, published: false, orderable: false, sample: false });
+  fillPrice(null);
+}
+function closeEditor() { selected.value = null; adding.value = false; error.value = ''; notice.value = ''; }
+function chooseCategory(value: string) {
+  form.product_category = value;
+  form.pricing_method = value.toLowerCase().includes('blind') ? 'matrix' : 'per_sqm';
+  if (form.pricing_method === 'matrix' && !Object.keys(form.pricing_matrix).length) form.pricing_matrix = {};
+}
+function matrixValue(height: number, width: number) { return form.pricing_matrix[String(height)]?.[String(width)] || ''; }
+function setMatrixValue(height: number, width: number, value: string) {
+  if (!form.pricing_matrix[String(height)]) form.pricing_matrix[String(height)] = {};
+  form.pricing_matrix[String(height)][String(width)] = value;
+}
+async function publishPricingChange() {
+  const code = selected.value?.source_code;
+  if (!code || !knowledge.value.current) return;
+  const draft = await request<any>('operations/pricing-knowledge/drafts/from-current', {});
+  const productRule = draft.manifest.products?.find((row: any) => row.source_code === code);
+  if (!productRule) throw new Error(tx('该产品没有连接到现有报价规则。','This product is not linked to an active quote rule.'));
+  productRule.rate_per_m2 = Number(price.rate_per_m2);
+  productRule.minimum_area = Number(price.minimum_area);
+  draft.manifest.order_minimum_area = Number(price.order_minimum_area);
+  draft.manifest.installation_per_panel = Number(price.installation_per_panel);
+  draft.manifest.minimum_installation = Number(price.minimum_installation);
+  await request(`operations/pricing-knowledge/drafts/${encodeURIComponent(draft.id)}`, { manifest: draft.manifest, facts: draft.facts });
+  await request(`operations/pricing-knowledge/drafts/${encodeURIComponent(draft.id)}/publish`, {});
+}
+async function saveProduct() {
+  if (!props.admin) return;
+  busy.value = true; error.value = ''; notice.value = '';
+  try {
+    if (!form.name_en.trim() || !form.material_en.trim() || !form.product_category) throw new Error(tx('请填写英文名称、材质和种类。','Enter the English name, material and category.'));
+    if (shutters.value && (!Number.isFinite(Number(price.rate_per_m2)) || Number(price.rate_per_m2) <= 0)) throw new Error(tx('请填写有效的每平方米单价。','Enter a valid rate per square metre.'));
+    if (shutters.value && (!Number.isFinite(Number(price.minimum_area)) || Number(price.minimum_area) <= 0 || !Number.isFinite(Number(price.order_minimum_area)) || Number(price.order_minimum_area) <= 0 || !Number.isFinite(Number(price.installation_per_panel)) || !Number.isFinite(Number(price.minimum_installation)))) throw new Error(tx('请检查面积和安装费规则。','Check the area and installation rules.'));
+    if (priceChanged.value) await publishPricingChange();
+    const payload = {
+      name_en: form.name_en.trim(), name_zh: form.name_en.trim(), material_en: form.material_en.trim(), material_zh: form.material_en.trim(),
+      description_en: form.description_en.trim(), description_zh: form.description_en.trim(), category: internalCategory.value,
+      product_category: form.product_category, pricing_method: form.pricing_method, pricing_matrix: form.pricing_matrix,
+      published: form.published, orderable: form.orderable, sample: form.sample,
+      image_url: selected.value?.image_url || '', image_urls: selected.value?.image_urls || [], unit: selected.value?.unit || 'mm',
+      width_min: null, width_max: null, height_min: null, height_max: null, colors: selected.value?.colors || [], controls: selected.value?.controls || [],
+    };
+    await request<Product>(selected.value ? `admin/products/${form.id}` : 'admin/products', payload);
+    await load(); emit('updated'); notice.value = tx('产品已保存。新价格只影响之后创建的订单。','Product saved. New prices apply only to orders created from now on.');
+    const saved = products.value.find(p => p.id === form.id);
+    if (!adding.value && saved) startEdit(saved); else closeEditor();
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
+  finally { busy.value = false; }
+}
+function openCategoryEditor() { draftCategories.value = [...categories.value]; newCategory.value = ''; categoryEditorOpen.value = true; }
+function addCategory() { const value = newCategory.value.trim(); if (!value || draftCategories.value.some(item => item.toLowerCase() === value.toLowerCase())) return; draftCategories.value.push(value); newCategory.value = ''; }
+function removeCategory(value: string) { draftCategories.value = draftCategories.value.filter(item => item !== value); }
+async function saveCategories() {
+  busy.value = true; error.value = '';
+  try { const result = await request<{ categories: string[] }>('operations/product-categories', { categories: draftCategories.value }); categories.value = result.categories; categoryEditorOpen.value = false; }
+  catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
+  finally { busy.value = false; }
+}
+async function load() {
+  loading.value = true;
+  try {
+    const tasks: Promise<any>[] = [request<Product[]>('admin/products')];
+    if (props.admin) tasks.push(request<{ categories: string[] }>('operations/product-categories'), request<Knowledge>('operations/pricing-knowledge'));
+    const result = await Promise.all(tasks);
+    products.value = result[0].map((p: Product) => ({ ...p, product_category: p.product_category || (p.category === 'blinds' ? 'Interior blinds' : 'Interior shutters') }));
+    if (props.admin) { categories.value = result[1].categories; knowledge.value = result[2]; }
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause); }
+  finally { loading.value = false; }
+}
+onMounted(load);
+</script>
+
+<template>
+  <section class="product-admin">
+    <header class="product-head"><div><p class="eyebrow">VERA · PRODUCT CATALOGUE</p><h2>Products</h2><p>Manage product details and the pricing rules used for future quotes.</p></div><div class="toolbar"><input v-model="search" type="search" placeholder="Search products" /><select v-model="categoryFilter"><option value="">All categories</option><option v-for="category in categories" :key="category" :value="category">{{ category }}</option></select><button v-if="admin" type="button" class="secondary" @click="openCategoryEditor">Manage categories</button><button v-if="admin" type="button" class="primary" @click="startNew">＋ Add product</button></div></header>
+    <p v-if="error && !selected && !categoryEditorOpen" class="alert">{{ error }}</p><p v-if="notice && !selected" class="success">{{ notice }}</p>
+    <div v-if="loading" class="empty">Loading products…</div>
+    <div v-else-if="filteredProducts.length" class="product-table-wrap"><table class="product-table"><thead><tr><th>Display name</th><th>Material</th><th>Category</th><th>Pricing</th><th>Website</th><th></th></tr></thead><tbody><tr v-for="product in filteredProducts" :key="product.id"><td><strong>{{ product.name_en }}</strong><small>#{{ product.id }}</small></td><td>{{ product.material_en }}</td><td>{{ product.product_category }}</td><td>{{ product.pricing_method === 'matrix' ? 'Width × height matrix' : 'Area · per m²' }}</td><td>{{ product.published ? 'Published' : 'Hidden' }}</td><td><button type="button" class="row-edit" @click="startEdit(product)">{{ admin ? 'Edit' : 'View' }}</button></td></tr></tbody></table></div>
+    <div v-else class="empty">No products found.</div>
+
+    <div v-if="selected || adding" class="shade" @click.self="closeEditor"><section class="editor" role="dialog" aria-modal="true" aria-label="Product details"><header><div><p class="eyebrow">PRODUCT DETAILS</p><h3>{{ adding ? 'Add product' : form.name_en }}</h3></div><button type="button" class="icon" @click="closeEditor">×</button></header><form @submit.prevent="saveProduct">
+      <div class="fields"><label>Display name<input v-model="form.name_en" maxlength="160" required :readonly="!admin" /></label><label>Material<input v-model="form.material_en" maxlength="100" required :readonly="!admin" /></label><label>Category<select :value="form.product_category" :disabled="!admin" @change="chooseCategory(($event.target as HTMLSelectElement).value)"><option v-for="category in categories" :key="category">{{ category }}</option></select></label><label>Description<textarea v-model="form.description_en" maxlength="3000" rows="3" :readonly="!admin" /></label></div>
+      <section class="pricing"><h4>Pricing & calculation</h4><template v-if="shutters"><div class="fields pricing-fields"><label>Product price per m² (NZD)<input v-model="price.rate_per_m2" inputmode="decimal" :readonly="!admin" /></label><label>Minimum billable area per window (m²)<input v-model="price.minimum_area" inputmode="decimal" :readonly="!admin" /></label><label>Order minimum area (m²)<input v-model="price.order_minimum_area" inputmode="decimal" :readonly="!admin" /></label><label>Installation per panel (NZD)<input v-model="price.installation_per_panel" inputmode="decimal" :readonly="!admin" /></label><label>Minimum installation per order (NZD)<input v-model="price.minimum_installation" inputmode="decimal" :readonly="!admin" /></label></div><p class="hint">Window area is rounded up to 0.01 m². The per-window floor and order-wide minimum are applied separately. Installation is calculated from panel count.</p></template><template v-else><p class="hint">Prices are looked up by window size. Widths: 600–3000 mm. Heights: 600–2500 mm. Both axes advance in 100 mm steps.</p><div v-if="admin" class="matrix-scroll"><table class="matrix"><thead><tr><th>Drop / Width</th><th v-for="width in widths" :key="width">{{ width }}</th></tr></thead><tbody><tr v-for="height in heights" :key="height"><th>{{ height }}</th><td v-for="width in widths" :key="width"><input inputmode="decimal" :aria-label="`Price at ${width} by ${height} mm`" :value="matrixValue(height,width)" @input="setMatrixValue(height,width,($event.target as HTMLInputElement).value)" /></td></tr></tbody></table></div><p v-else class="hint">Matrix prices are not configured.</p></template></section>
+      <div v-if="admin" class="publish-options"><label><input v-model="form.published" type="checkbox" /> Show on website</label><label><input v-model="form.orderable" type="checkbox" /> Available for new orders</label></div>
+      <p v-if="error" class="alert">{{ error }}</p><p v-if="notice" class="success">{{ notice }}</p><footer><button v-if="admin" type="submit" class="primary" :disabled="busy">{{ busy ? 'Saving…' : 'Save product' }}</button><button type="button" class="secondary" @click="closeEditor">{{ admin ? 'Cancel' : 'Close' }}</button></footer>
+    </form></section></div>
+
+    <div v-if="categoryEditorOpen" class="shade" @click.self="categoryEditorOpen=false"><section class="category-editor" role="dialog" aria-modal="true" aria-label="Manage product categories"><header><div><p class="eyebrow">PRODUCT SETTINGS</p><h3>Manage categories</h3></div><button type="button" class="icon" @click="categoryEditorOpen=false">×</button></header><p>Categories group products and determine their pricing method. Categories assigned to a product cannot be removed.</p><div class="category-list"><div v-for="category in draftCategories" :key="category"><span>{{ category }}</span><button type="button" class="remove-category" @click="removeCategory(category)" :disabled="products.some(p => p.product_category === category)">Remove</button></div></div><div class="category-add"><input v-model="newCategory" maxlength="80" placeholder="New category name" @keydown.enter.prevent="addCategory" /><button type="button" class="secondary" @click="addCategory">Add</button></div><p v-if="error" class="alert">{{ error }}</p><footer><button type="button" class="primary" :disabled="busy || draftCategories.length < 4" @click="saveCategories">{{ busy ? 'Saving…' : 'Save categories' }}</button><button type="button" class="secondary" @click="categoryEditorOpen=false">Cancel</button></footer></section></div>
+  </section>
+</template>
+
+<style scoped>
+.product-admin{color:#1b2421}.product-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;flex-wrap:wrap;margin:4px 0 16px}.product-head h2{margin:0;font-size:24px}.product-head p:not(.eyebrow){margin:5px 0 0;color:#627168;font-size:13px}.eyebrow{margin:0 0 4px;font-size:10px;letter-spacing:.12em;color:#64766b}.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.toolbar input,.toolbar select,.fields input,.fields select,.fields textarea,.category-add input{box-sizing:border-box;min-height:38px;padding:7px 10px;border:1px solid #cdd8d0;border-radius:6px;background:#fff;font:inherit}.toolbar input{width:210px}.toolbar select{min-width:170px}.primary,.secondary,.row-edit,.icon{min-height:38px;padding:0 14px;border-radius:999px;border:1px solid #0f6e5c;background:#0f6e5c;color:#fff;font-weight:650;cursor:pointer}.secondary,.row-edit{border-color:#cdd8d0;background:#fff;color:#284537}.product-table-wrap{overflow:auto;background:#fff;border:1px solid #e1e7e2;border-radius:8px}.product-table{width:100%;border-collapse:collapse}.product-table th,.product-table td{padding:11px 12px;border-bottom:1px solid #edf0ed;text-align:left;font-size:13px;white-space:nowrap}.product-table th{color:#52635a;font-size:11px;letter-spacing:.03em}.product-table tbody tr:hover{background:#f8faf8}.product-table td:first-child{white-space:normal}.product-table td small{display:block;color:#758279;font-size:11px}.empty{padding:32px;color:#718078}.shade{position:fixed;inset:0;z-index:1100;display:grid;place-items:center;padding:16px;background:#10251b77}.editor,.category-editor{width:min(850px,96vw);max-height:92dvh;overflow:auto;background:#f7f9f7;border-radius:12px;box-shadow:0 18px 56px #10251b55}.editor>header,.category-editor>header{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;align-items:flex-start;padding:18px 22px;background:white;border-bottom:1px solid #e1e8e2}.editor h3,.category-editor h3{margin:0;font-size:20px}.icon{width:38px;min-width:38px;padding:0;background:white;color:#385347;border-color:#d7e0d9;font-size:20px}.editor form{padding:18px 22px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}.fields label{display:grid;gap:5px;font-size:12px;font-weight:650;color:#43574b}.fields label:last-child{grid-column:1/-1}.fields textarea{resize:vertical}.pricing{margin-top:18px;padding:15px;background:white;border:1px solid #dfe7e1;border-radius:8px}.pricing h4{margin:0 0 12px;font-size:15px}.pricing-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.hint{font-size:12px;color:#627168;line-height:1.55}.publish-options{display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;font-size:13px}.publish-options label{display:flex;align-items:center;gap:7px}.editor footer,.category-editor footer{display:flex;gap:8px;justify-content:flex-end;padding-top:16px}.matrix-scroll{overflow:auto;max-height:360px;border:1px solid #e4eae5}.matrix{border-collapse:collapse;width:max-content;font-size:10px}.matrix th,.matrix td{padding:3px;border:1px solid #e5eae6;text-align:center}.matrix th{position:sticky;top:0;background:#f1f5f2}.matrix input{width:66px;min-height:29px;padding:3px 5px;border:1px solid #d6ded7;border-radius:4px}.category-editor{width:min(520px,96vw);padding-bottom:18px}.category-editor>p{padding:0 20px;color:#627168;font-size:13px;line-height:1.5}.category-list{display:grid;gap:6px;padding:0 20px}.category-list>div{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:#fff;border:1px solid #e2e8e3;border-radius:6px}.remove-category{border:0;background:transparent;color:#8c3d34;font-size:12px;cursor:pointer}.remove-category:disabled{opacity:.35;cursor:not-allowed}.category-add{display:flex;gap:8px;padding:12px 20px}.category-add input{flex:1}.category-editor footer{padding:0 20px}.alert,.success{padding:10px 12px;border-radius:6px;font-size:13px;background:#fff0ed;color:#8f3425}.success{background:#edf5ef;color:#17523a}@media(max-width:700px){.toolbar{width:100%}.toolbar input,.toolbar select{width:100%}.fields,.pricing-fields{grid-template-columns:1fr}.fields label:last-child{grid-column:auto}.editor>header,.editor form{padding-inline:14px}}
 </style>

@@ -893,7 +893,7 @@ class ShipmentNameEdit(Input):
 
 
 class OrderNumberLimitEdit(Input):
-    max_length: int = Field(ge=10, le=100, strict=True)
+    max_length: int = Field(ge=10, le=20, strict=True)
 
 
 class Quantity(Input):
@@ -933,6 +933,7 @@ class Settlement(Batch):
     billing_basis: Literal['all_arrived_remaining_total']
     rebate_ids: list[str] = Field(default_factory=list, max_length=100)
     additional_items: list[InvoiceCharge] = Field(default_factory=list, max_length=50)
+    due_date: date | None = None
 
     @field_validator('rebate_ids')
     @classmethod
@@ -1010,6 +1011,23 @@ class ManualInvoice(Input):
     items: list[ManualItem] = Field(min_length=1, max_length=50)
     operation_key: str = Field(min_length=8, max_length=100)
     order_ids: list[str] = Field(default_factory=list, max_length=100)
+    due_date: date | None = None
+
+
+class RebateClaimStatusEdit(Input):
+    claim_status: Literal['unclaimed', 'claimed']
+
+
+class ProductCategoryEdit(Input):
+    categories: list[str] = Field(min_length=4, max_length=20)
+
+    @field_validator('categories')
+    @classmethod
+    def validate_categories(cls, value):
+        cleaned = [item.strip() for item in value]
+        if any(not item or len(item) > 80 for item in cleaned) or len({item.casefold() for item in cleaned}) != len(cleaned):
+            raise ValueError('Product categories must be unique, non-empty names up to 80 characters')
+        return cleaned
 
 
 class ShipmentCosts(Input):
@@ -1052,7 +1070,7 @@ def register(app, s):
 
     def order_number_max_length(c):
         row=c.execute("SELECT data FROM operations_records WHERE id='order-number-limit'").fetchone()
-        return int(json.loads(row['data']).get('max_length',32)) if row else 32
+        return min(20, int(json.loads(row['data']).get('max_length',20))) if row else 20
 
     def assign_business_number(c, customer, project_name):
         kind = customer.get('customer_type') or 'wholesale'
@@ -2035,6 +2053,29 @@ def register(app, s):
             max_length = order_number_max_length(c)
         return {'email':configuration()[0],'storage':s.STORAGE_MODE,'database':s.BACKEND,'payment_details':payment,'invoice_template':template,'order_number_max_length':max_length}
 
+    @app.get('/api/operations/product-categories')
+    def product_categories(actor=Depends(s.require_admin)):
+        defaults = ['Interior shutters', 'Interior blinds', 'Exterior shutters', 'Exterior blinds']
+        with s.db() as c:
+            row = c.execute("SELECT data FROM operations_records WHERE id='product-categories'").fetchone()
+            return {'categories': json.loads(row['data']).get('categories', defaults) if row else defaults}
+
+    @app.post('/api/operations/product-categories')
+    def save_product_categories(body: ProductCategoryEdit, actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            used = {str(json.loads(row['data']).get('product_category') or '').casefold()
+                    for row in c.execute('SELECT data FROM products').fetchall()}
+            previous = c.execute("SELECT data FROM operations_records WHERE id='product-categories'").fetchone()
+            defaults = ['Interior shutters', 'Interior blinds', 'Exterior shutters', 'Exterior blinds']
+            old = json.loads(previous['data']).get('categories', defaults) if previous else defaults
+            removed_used = {name for name in old if name.casefold() in used and name.casefold() not in {x.casefold() for x in body.categories}}
+            if removed_used:
+                raise HTTPException(409, 'A category assigned to a product cannot be removed')
+            saved = {'id': 'product-categories', 'categories': body.categories, 'updated_at': s.now(), 'updated_by': actor}
+            put(c, 'setting', saved)
+            return {'categories': body.categories}
+
     @app.post('/api/operations/settings/order-number-limit')
     def save_order_number_limit(body: OrderNumberLimitEdit, actor=Depends(s.require_admin)):
         with s.db() as c:
@@ -2998,7 +3039,7 @@ def register(app, s):
             auto_id = f"rebate:auto:{cid}:{month}"
             auto = next((credit for credit in month_credits if credit.get('id') == auto_id), None)
             if auto:
-                if not auto.get('allocations') and Decimal(str(auto.get('used', '0'))) == 0:
+                if not auto.get('allocations') and not auto.get('manual_claim_override') and Decimal(str(auto.get('used', '0'))) == 0:
                     auto.update(amount=money(target), remaining=money(target), source_order_ids=[row['order_id'] for row in entry['orders'] if Decimal(row['rebate']) > 0],
                                 evidence='Automatically calculated from deposit-paid product totals and the active monthly rebate rule.')
                     put(c, 'rebate', auto, cid)
@@ -3478,7 +3519,8 @@ def register(app, s):
             d = {'id': iid, 'customer_id': body.customer_id, 'kind': 'manual', 'order_ids': list(dict.fromkeys(body.order_ids)),
                  'lines': [{'description': item.description, 'amount': money(item.amount)} for item in body.items],
                  'currency': 'NZD', 'tax_basis': 'GST included in total', 'tax_rate': tax_rate_now(c),
-                 'gross': money(total), 'amount': money(total), 'status': 'draft', 'created_at': s.now(), 'actor': actor,
+                 'gross': money(total), 'amount': money(total), 'status': 'draft', 'created_at': s.now(),
+                 'due_date': body.due_date.isoformat() if body.due_date else None, 'actor': actor,
                  'request_hash': bodyhash(body)}
             number_invoice(c, d)
             put(c, 'invoice', d, body.customer_id)
@@ -3556,6 +3598,24 @@ def register(app, s):
             put(c, 'rebate', d, body.customer_id)
             return d
 
+    @app.post('/api/operations/rebates/{rid}/claim-status')
+    def edit_rebate_claim_status(rid: str, body: RebateClaimStatusEdit, actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            rebate = get(c, rid, 'rebate')
+            actual_allocations = [item for item in rebate.get('allocations', []) if item.get('invoice_id')]
+            if body.claim_status == 'unclaimed' and actual_allocations:
+                raise HTTPException(409, 'A rebate already applied to an invoice cannot be marked unclaimed')
+            amount = Decimal(str(rebate.get('amount', '0.00')))
+            if body.claim_status == 'claimed':
+                rebate.update(used=money(amount), remaining='0.00', manual_claim_override='claimed',
+                              manual_claim_updated_at=s.now(), manual_claim_updated_by=actor)
+            else:
+                rebate.update(used='0.00', remaining=money(amount), manual_claim_override='unclaimed',
+                              manual_claim_updated_at=s.now(), manual_claim_updated_by=actor)
+            put(c, 'rebate', rebate, rebate['customer_id'])
+            return rebate
+
     @app.get('/api/operations/rebates')
     def rebates(actor=Depends(s.auth)):
         with s.db() as c:
@@ -3585,7 +3645,7 @@ def register(app, s):
                                 'claimed': claim_status == 'claimed', 'claim_status': claim_status})
             return {'calculation_status': 'automatic_monthly_calculation', 'credits': credits, 'months': months}
 
-    def create_balance_invoice(c, orders, actor, iid, rules_evidence, request_hash, rebate_ids=None, additional_items=None):
+    def create_balance_invoice(c, orders, actor, iid, rules_evidence, request_hash, rebate_ids=None, additional_items=None, due_date=None):
         """One draft balance invoice for arrived orders of one company, with only explicitly selected rebate credits."""
         cid, currency = orders[0]['customer_id'], orders[0]['currency']
         lines = []
@@ -3613,7 +3673,7 @@ def register(app, s):
             allocations.append({'rebate_id': r['id'], 'month': r['month'], 'amount': money(used)})
         d = {'id': iid, 'customer_id': cid, 'kind': 'balance', 'order_ids': [o['id'] for o in orders], 'lines': lines,
              'currency': currency, 'tax_basis': orders[0]['tax_basis'], 'tax_rate': orders[0].get('tax_rate', '0.15'), 'gross': money(gross), 'amount': money(remaining),
-             'rebate_allocations': allocations, 'status': 'draft', 'created_at': s.now(), 'actor': actor,
+             'rebate_allocations': allocations, 'status': 'draft', 'created_at': s.now(), 'due_date': due_date.isoformat() if due_date else None, 'actor': actor,
              'template': invoice_template(c), 'payment_details': payment_view(payment_details(c)),
              'request_hash': request_hash, 'rules_evidence': rules_evidence}
         number_invoice(c, d)
@@ -3646,7 +3706,7 @@ def register(app, s):
                     raise HTTPException(422, 'Selected rebates must belong to the invoiced customer and currency')
                 if rebate.get('month', '') >= s.business_now().strftime('%Y-%m') or Decimal(str(rebate.get('remaining', '0.00'))) <= 0:
                     raise HTTPException(409, 'Selected rebate is not currently available to claim')
-            return create_balance_invoice(c, orders, actor, iid, body.rules_evidence, bodyhash(body), body.rebate_ids, body.additional_items)
+            return create_balance_invoice(c, orders, actor, iid, body.rules_evidence, bodyhash(body), body.rebate_ids, body.additional_items, body.due_date)
 
     @app.get('/api/portal/consumption')
     def consumption(cid=Depends(customer_auth)):

@@ -1,165 +1,19 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
-import { request } from "../crm-api";
+import { onMounted, ref } from 'vue';
+import { request } from '../crm-api';
 
-const props = defineProps<{ locale: string }>();
-const tx = (zh: string, en: string) => (props.locale === "zh" ? zh : en);
-const notice = ref("");
-type PaymentDetails = { account_name: string; bank_name: string; account_number: string; reference_note: string; configured?: boolean };
-type InvoiceTemplate = { company_name: string; gst_number: string; company_address: string; footer: string; deposit_note: string; balance_note: string };
-const settings = ref<{ email?: { configured?: boolean; sender?: string; mode?:string }; storage?: string; database?: string; payment_details?: PaymentDetails; invoice_template?: InvoiceTemplate; order_number_max_length?: number } | null>(null);
-const payment = reactive<PaymentDetails>({ account_name: "", bank_name: "", account_number: "", reference_note: "" });
-const invoiceTemplate = reactive<InvoiceTemplate>({ company_name: "VERA Shading Solutions", gst_number: "", company_address: "", footer: "", deposit_note: "Deposit of 60% of the order total. Amounts include GST.", balance_note: "Balance of each order after the deposit already paid. Amounts include GST." });
-const orderNumberMaxLength = ref(32);
-const paymentBusy = ref(false);
-const paymentError = ref("");
-const paymentSaved = ref("");
-const orderNumberBusy = ref(false);
-const orderNumberError = ref("");
-const orderNumberSaved = ref("");
-
-function fillPayment(details?: PaymentDetails) {
-  for (const key of ["account_name", "bank_name", "account_number", "reference_note"] as const) payment[key] = details?.[key] ?? "";
-}
-
-function fillInvoiceTemplate(template?: InvoiceTemplate) {
-  for (const key of ["company_name", "gst_number", "company_address", "footer", "deposit_note", "balance_note"] as const) invoiceTemplate[key] = template?.[key] ?? invoiceTemplate[key];
-}
-
-async function savePayment() {
-  paymentError.value = ""; paymentSaved.value = "";
-  paymentBusy.value = true;
-  try {
-    const result = await request<{ payment_details: PaymentDetails }>("operations/settings", {
-      payment_details: { account_name: payment.account_name.trim(), bank_name: payment.bank_name.trim(), account_number: payment.account_number.trim(), reference_note: payment.reference_note.trim() },
-    });
-    fillPayment(result.payment_details);
-    if (settings.value) settings.value.payment_details = result.payment_details;
-    paymentSaved.value = result.payment_details.configured
-      ? tx("已保存，之后发出的账单邮件和 PDF 都会带上这些收款信息。", "Saved. Invoice emails and PDFs sent from now on carry these payment details.")
-      : tx("已保存为空，账单将只提示联系 VERA 付款。", "Saved empty. Invoices will only ask the customer to contact VERA.");
-  } catch (cause) {
-    paymentError.value = cause instanceof Error ? cause.message : String(cause);
-  } finally { paymentBusy.value = false; }
-}
-
-async function saveInvoiceTemplate() {
-  paymentError.value = ""; paymentSaved.value = ""; paymentBusy.value = true;
-  try {
-    const result = await request<{ invoice_template: InvoiceTemplate }>("operations/settings", {
-      payment_details: { account_name: payment.account_name.trim(), bank_name: payment.bank_name.trim(), account_number: payment.account_number.trim(), reference_note: payment.reference_note.trim() },
-      invoice_template: { company_name: invoiceTemplate.company_name.trim(), gst_number: invoiceTemplate.gst_number.trim(), company_address: invoiceTemplate.company_address.trim(), footer: invoiceTemplate.footer.trim(), deposit_note: invoiceTemplate.deposit_note.trim(), balance_note: invoiceTemplate.balance_note.trim() },
-    });
-    fillInvoiceTemplate(result.invoice_template);
-    if (settings.value) settings.value.invoice_template = result.invoice_template;
-    paymentSaved.value = tx("账单模板已保存。之后新建的账单会使用这些设置。", "Invoice templates saved. New invoices will use these settings.");
-  } catch (cause) { paymentError.value = cause instanceof Error ? cause.message : String(cause); }
-  finally { paymentBusy.value = false; }
-}
-
-async function saveOrderNumberLimit() {
-  orderNumberError.value = ""; orderNumberSaved.value = ""; orderNumberBusy.value = true;
-  try {
-    const result = await request<{ max_length: number }>("operations/settings/order-number-limit", { max_length: Number(orderNumberMaxLength.value) });
-    orderNumberMaxLength.value = result.max_length;
-    if (settings.value) settings.value.order_number_max_length = result.max_length;
-    orderNumberSaved.value = tx("已保存。此限制仅用于之后创建或修改的订单 ID。", "Saved. This limit applies only to order IDs created or edited from now on.");
-  } catch (cause) { orderNumberError.value = cause instanceof Error ? cause.message : String(cause); }
-  finally { orderNumberBusy.value = false; }
-}
-
-onMounted(async () => {
-  try {
-    settings.value = await request("operations/settings");
-    fillPayment(settings.value?.payment_details);
-    fillInvoiceTemplate(settings.value?.invoice_template);
-    orderNumberMaxLength.value = settings.value?.order_number_max_length ?? 32;
-  } catch {
-    notice.value = tx("暂时无法读取服务配置", "Could not load service settings");
-  }
-});
+const props=defineProps<{locale:string}>();
+const tx=(zh:string,en:string)=>props.locale==='zh'?zh:en;
+const state=ref<any>(null); const maxLength=ref(20); const busy=ref(false); const error=ref(''); const notice=ref('');
+onMounted(async()=>{try{state.value=await request('operations/settings');maxLength.value=state.value?.order_number_max_length??20}catch(e){error.value=e instanceof Error?e.message:String(e)}});
+async function save(){busy.value=true;error.value='';notice.value='';try{const result=await request<{max_length:number}>('operations/settings/order-number-limit',{max_length:Number(maxLength.value)});maxLength.value=result.max_length;notice.value=tx('已保存。仅影响之后创建或修改的订单 ID。','Saved. This applies to order IDs created or edited from now on.')}catch(e){error.value=e instanceof Error?e.message:String(e)}finally{busy.value=false}}
 </script>
-
 <template>
-  <section class="ops-settings">
-    <h2>{{ tx("服务配置", "Service settings") }}</h2>
-    <p>{{ tx("只显示发件是否就绪、存储方式和数据库类型。密钥不出现在页面上。", "This shows whether outgoing mail is ready, plus the storage mode and database type. Secrets are not shown.") }}</p>
-    <p v-if="notice" role="alert">{{ notice }}</p>
-    <div v-else-if="settings" class="ops-grid">
-      <article>
-        <span>{{ tx("发件", "Outgoing mail") }}</span>
-        <h3>{{ settings.email?.mode==='demo' ? (settings.email?.configured ? tx('演示发件就绪 · 仅自己','Demo mail ready · owner only') : tx('演示发件未就绪','Demo mail not ready')) : settings.email?.configured ? tx("已配置", "Configured") : tx("未配置", "Not configured") }}</h3>
-        <p>{{ settings.email?.mode==='demo' ? tx('客户不会收到邮件；发件人与收件人均限定为管理员测试邮箱。','Customers receive no email; sender and recipient are limited to the owner test mailbox.') : settings.email?.sender || tx("没有可显示的发件地址", "No sender address to show") }}</p>
-      </article>
-      <article>
-        <span>{{ tx("存储", "Storage") }}</span>
-        <h3>{{ settings.storage || "—" }}</h3>
-      </article>
-      <article>
-        <span>{{ tx("数据库", "Database") }}</span>
-        <h3>{{ settings.database || "—" }}</h3>
-      </article>
-    </div>
-    <form v-if="settings?.payment_details" class="payment-form" @submit.prevent="savePayment">
-      <h3>{{ tx("收款信息", "Payment details") }}</h3>
-      <p>{{ tx("显示在每张账单的邮件和 PDF 上。没有填写时，账单只提示客户联系 VERA。", "Shown on every invoice email and PDF. Until filled in, invoices only ask the customer to contact VERA.") }}</p>
-      <div class="payment-grid">
-        <label>{{ tx("账户名称", "Account name") }}<input v-model="payment.account_name" maxlength="200" autocomplete="off" /></label>
-        <label>{{ tx("银行", "Bank") }}<input v-model="payment.bank_name" maxlength="200" autocomplete="off" /></label>
-        <label>{{ tx("账号", "Account number") }}<input v-model="payment.account_number" maxlength="100" inputmode="numeric" autocomplete="off" /></label>
-        <label class="wide">{{ tx("备注（可选）", "Note (optional)") }}<textarea v-model="payment.reference_note" maxlength="500" rows="2" :placeholder="tx('例如：付款时请写账单号作为参考', 'e.g. Please use the invoice number as the payment reference')"></textarea></label>
-      </div>
-      <p v-if="paymentError" class="payment-error" role="alert">{{ paymentError }}</p>
-      <p v-if="paymentSaved" class="payment-ok" role="status">{{ paymentSaved }}</p>
-      <button type="submit" :disabled="paymentBusy">{{ paymentBusy ? tx("保存中…", "Saving…") : tx("保存收款信息", "Save payment details") }}</button>
-    </form>
-    <form v-if="settings" class="payment-form invoice-template-form" @submit.prevent="saveInvoiceTemplate">
-      <h3>{{ tx("账单模板","Invoice templates") }}</h3>
-      <p>{{ tx("设置会用于之后生成的定金和尾款账单；账单会保留创建时的模板与付款信息。产品明细暂不列入定金账单。","These settings apply to new deposit and balance invoices. Each invoice keeps a snapshot of its template and payment details. Deposit invoices do not include product line items.") }}</p>
-      <div class="template-logo"><img src="/images/vera-logo.png" alt="VERA Shading Solutions" /><span>{{ tx("固定品牌 Logo","Brand logo") }}</span></div>
-      <div class="payment-grid">
-        <label>{{ tx("公司名称","Company name") }}<input v-model="invoiceTemplate.company_name" maxlength="200" required /></label>
-        <label>{{ tx("GST 号码","GST number") }}<input v-model="invoiceTemplate.gst_number" maxlength="80" /></label>
-        <label class="wide">{{ tx("公司地址","Company address") }}<textarea v-model="invoiceTemplate.company_address" maxlength="500" rows="2"></textarea></label>
-        <label class="wide">{{ tx("定金账单说明","Deposit invoice note") }}<textarea v-model="invoiceTemplate.deposit_note" maxlength="500" rows="2"></textarea></label>
-        <label class="wide">{{ tx("尾款账单说明","Balance invoice note") }}<textarea v-model="invoiceTemplate.balance_note" maxlength="500" rows="2"></textarea></label>
-        <label class="wide">{{ tx("账单页脚","Invoice footer") }}<textarea v-model="invoiceTemplate.footer" maxlength="1000" rows="2" :placeholder="tx('留空时使用系统默认付款提示','Leave blank to use the default payment note')"></textarea></label>
-      </div>
-      <p v-if="paymentError" class="payment-error" role="alert">{{ paymentError }}</p><p v-if="paymentSaved" class="payment-ok" role="status">{{ paymentSaved }}</p>
-      <button type="submit" :disabled="paymentBusy">{{ paymentBusy ? tx("保存中…", "Saving…") : tx("保存账单模板", "Save invoice templates") }}</button>
-    </form>
-    <form v-if="settings" class="payment-form order-id-limit-form" @submit.prevent="saveOrderNumberLimit">
-      <h3>{{ tx("订单 ID 最大长度", "Maximum Order ID length") }}</h3>
-      <p>{{ tx("只限制之后新建或手动修改的订单 ID，不会改动已有编号。客户类型为批发时，新建编号超过上限会提示缩短项目名称。范围：10–100 个字符。", "Applies only to newly created or manually edited order IDs; existing IDs are left as they are. Wholesale IDs over the limit require a shorter project name. Range: 10–100 characters.") }}</p>
-      <div class="payment-grid"><label>{{ tx("最大字符数", "Maximum characters") }}<input v-model.number="orderNumberMaxLength" type="number" min="10" max="100" step="1" required /></label></div>
-      <p v-if="orderNumberError" class="payment-error" role="alert">{{ orderNumberError }}</p>
-      <p v-if="orderNumberSaved" class="payment-ok" role="status">{{ orderNumberSaved }}</p>
-      <button type="submit" :disabled="orderNumberBusy">{{ orderNumberBusy ? tx("保存中…", "Saving…") : tx("保存订单 ID 限制", "Save Order ID limit") }}</button>
-    </form>
+  <section class="ops-settings"><h2>{{ tx('系统状态','System status') }}</h2><p>{{ tx('账单模板和付款信息已移至 Accounting → Invoice → Invoice settings。','Invoice templates and payment details are managed in Accounting → Invoice → Invoice settings.') }}</p>
+    <p v-if="error" class="message error">{{ error }}</p><div v-if="state" class="ops-grid"><article><span>{{ tx('发件','Outgoing mail') }}</span><h3>{{ state.email?.mode==='demo'?(state.email?.configured?tx('演示发件就绪 · 仅自己','Demo mail ready · owner only'):tx('演示发件未就绪','Demo mail not ready')):state.email?.configured?tx('已配置','Configured'):tx('未配置','Not configured') }}</h3><p>{{ state.email?.mode==='demo'?tx('客户不会收到演示邮件。','Customers do not receive demo emails.'):state.email?.sender||tx('没有可显示的发件地址','No sender address to show') }}</p></article><article><span>{{ tx('存储','Storage') }}</span><h3>{{ state.storage||'—' }}</h3></article><article><span>{{ tx('数据库','Database') }}</span><h3>{{ state.database||'—' }}</h3></article></div>
+    <form v-if="state" class="limit" @submit.prevent="save"><h3>{{ tx('订单 ID 最大长度','Maximum Order ID length') }}</h3><p>{{ tx('订单 ID 最多可包含的字符数；已有订单号不会被修改。范围：10–20。','Maximum characters for new or manually edited order IDs. Existing IDs are unchanged. Range: 10–20.') }}</p><label>{{ tx('字符数','Characters') }}<input v-model.number="maxLength" type="number" min="10" max="20" required /></label><button :disabled="busy">{{ busy?tx('保存中…','Saving…'):tx('保存限制','Save limit') }}</button><p v-if="notice" class="message success">{{ notice }}</p><p v-if="error" class="message error">{{ error }}</p></form>
   </section>
 </template>
-
 <style scoped>
-.ops-settings { padding: 8px 0 28px; }
-.ops-settings h2 { font-size: 20px; font-weight: 600; margin: 0 0 12px; }
-.ops-settings > p { font-size: 15px; line-height: 1.6; color: #54645c; max-width: 640px; }
-.ops-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
-.ops-grid article { padding: 16px; border: 1px solid #e0e8d9; background: #fff; border-radius: 6px; min-width: 0; }
-.ops-grid span { font-size: 13px; letter-spacing: 0.04em; color: #52635a; }
-.ops-grid h3 { font-size: 18px; font-weight: 600; margin: 10px 0 0; overflow-wrap: anywhere; }
-.ops-grid p { font-size: 14px; line-height: 1.5; color: #54645c; margin: 8px 0 0; overflow-wrap: anywhere; }
-.payment-form { margin-top: 28px; padding: 16px; border: 1px solid #e0e8d9; background: #fff; border-radius: 6px; max-width: 760px; }
-.payment-form h3 { font-size: 18px; font-weight: 600; margin: 0 0 6px; }
-.payment-form > p { font-size: 13px; line-height: 1.6; color: #54645c; margin: 0 0 14px; }
-.payment-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.payment-grid label { display: grid; gap: 6px; font-size: 12px; font-weight: 650; }
-.payment-grid .wide { grid-column: 1 / -1; }
-.payment-grid input, .payment-grid textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #ccd7cf; border-radius: 4px; font: inherit; font-weight: 400; background: #fff; }
-.payment-grid input { height: 38px; min-height: 0; }
-.payment-form button { margin-top: 14px; min-height: 40px; padding: 0 16px; border: 0; border-radius: 5px; background: #0f6e5c; color: #fff; font-weight: 650; cursor: pointer; }
-.payment-form button:disabled { opacity: .55; cursor: not-allowed; }
-.invoice-template-form{max-width:900px}.template-logo{display:flex;align-items:center;gap:14px;margin:4px 0 16px;padding:11px 13px;border:1px solid #e2e9e3;border-radius:7px;background:#fbfcfb;color:#617168;font-size:12px}.template-logo img{width:150px;height:48px;object-fit:contain}
-.payment-error { margin: 12px 0 0; padding: 10px 12px; border-radius: 6px; background: #fff0ed; color: #8f3425; font-size: 13px; }
-.payment-ok { margin: 12px 0 0; padding: 10px 12px; border-radius: 6px; background: #edf5ef; color: #17523a; font-size: 13px; }
-@media (max-width: 800px) { .ops-grid { grid-template-columns: 1fr; } .payment-grid { grid-template-columns: 1fr; } }
+.ops-settings{padding:8px 0 28px}.ops-settings h2{margin:0 0 8px;font-size:20px}.ops-settings>p{max-width:720px;color:#58675f;font-size:13px;line-height:1.55}.ops-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:16px}.ops-grid article,.limit{padding:15px;border:1px solid #dfe7e1;border-radius:8px;background:#fff}.ops-grid span{color:#52635a;font-size:12px}.ops-grid h3{margin:8px 0 0;font-size:16px}.ops-grid p,.limit p{color:#5c6b62;font-size:12px;line-height:1.5}.limit{max-width:640px;margin-top:18px}.limit h3{margin:0}.limit label{display:grid;gap:5px;max-width:240px;font-size:12px;font-weight:650}.limit input{height:36px;padding:5px 8px;border:1px solid #ccd7cf;border-radius:5px}.limit button{margin-top:12px;min-height:38px;padding:0 14px;border:0;border-radius:999px;background:#0f6e5c;color:#fff;font-weight:650}.message{padding:9px 12px;border-radius:6px;font-size:12px}.error{background:#fff0ed;color:#8f3425}.success{background:#edf5ef;color:#17523a}@media(max-width:700px){.ops-grid{grid-template-columns:1fr}}
 </style>

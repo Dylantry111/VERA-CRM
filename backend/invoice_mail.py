@@ -114,6 +114,7 @@ def build(invoice, customer, orders, payment=None):
         'kind_key': kind,
         'is_deposit': deposit,
         'date': str(invoice.get('created_at', ''))[:10],
+        'due_date': str(invoice.get('due_date') or '—')[:10],
         'currency': currency,
         'tax_basis': str(invoice.get('tax_basis', '')).replace('_', ' '),
         'company': customer.get('company', ''),
@@ -179,6 +180,7 @@ def _text(m):
         else:
             lines.append(f"Rebate applied: -{m['currency']} {m['rebate']}")
     lines += [f"Includes GST ({m['gst_rate']}): {m['currency']} {m['gst']}", f"Amount due (incl. GST): {m['currency']} {m['due']}", m['basis'], '']
+    if m.get('due_date') and m['due_date'] != '—': lines.insert(3, f"Due date: {m['due_date']}")
     if m['payment']:
         lines += ['Payment details'] + [f"    {label}: {value}" for label, value in m['payment']] + ['']
     lines += [m['footer'], 'The PDF invoice is attached.']
@@ -221,7 +223,7 @@ def _html(m):
 <div style="font-size:24px;font-weight:700;margin-top:6px">{e(m["kind"])}</div><div style="font-size:14px;opacity:.9;margin-top:2px">{e(m["number"])}</div>{reference}</td></tr>
 <tr><td style="padding:28px 32px 8px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
 <td valign="top" style="font-size:13px;line-height:1.6"><div style="color:#64766b;font-size:11px;letter-spacing:.1em">BILL TO</div><strong>{e(m["company"])}</strong>{"<br>" + e(m["contact"]) if m["contact"] else ""}{"<br>" + e(m["address"]) if m["address"] else ""}</td>
-<td valign="top" align="right" style="font-size:13px;line-height:1.6"><div style="color:#64766b;font-size:11px;letter-spacing:.1em">INVOICE DATE</div><strong>{e(m["date"])}</strong></td></tr></table></td></tr>
+<td valign="top" align="right" style="font-size:13px;line-height:1.6"><div style="color:#64766b;font-size:11px;letter-spacing:.1em">INVOICE DATE</div><strong>{e(m["date"])}</strong><br><span style="color:#64766b;font-size:11px">DUE DATE</span> <strong>{e(m["due_date"])}</strong></td></tr></table></td></tr>
 <tr><td style="padding:12px 32px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">
 <tr><td style="padding:8px 0;border-bottom:2px solid {ink};font-size:11px;letter-spacing:.08em;color:#64766b">ORDER</td>{th}</tr>
 {body}{extra}</table></td></tr>
@@ -277,7 +279,8 @@ def render_pdf(m):
     if m['reference']:
         story.append(P('Reference: ' + m['reference'], base))
     story.append(Spacer(1, 8 * mm))
-    head = Table([[P('BILL TO', small), P('INVOICE DATE', small_right)], [P(m['company'], bold), P(m['date'], bold_right)]], colWidths=[114 * mm, 60 * mm])
+    head = Table([[P('BILL TO', small), P('INVOICE DATE', small_right), P('DUE DATE', small_right)],
+                  [P(m['company'], bold), P(m['date'], bold_right), P(m.get('due_date') or '—', bold_right)]], colWidths=[104 * mm, 35 * mm, 35 * mm])
     head.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0)]))
     story.append(head)
     for extra in (m['contact'], m['address']):

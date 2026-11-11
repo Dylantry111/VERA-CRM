@@ -245,6 +245,7 @@ const rebates = ref<Rebate[]>([]);
 const rebateMonths = ref<RebateMonth[]>([]);
 const balanceRebatePick = ref<string[]>([]);
 const balanceInvoiceOpen = ref(false);
+const balanceDueDate = ref("");
 const balanceAdditionalItems = ref<{ id: string; description: string; amount: string }[]>([]);
 const balanceSelectedOrders = computed(() => orders.value.filter((order) => balancePicked.value.includes(order.id)));
 const balanceRebates = computed(() => {
@@ -1015,6 +1016,7 @@ function fillEvidence() {
 
 function settleSelected() {
   const rows = selectedOrders();
+  if (!balanceDueDate.value) { error.value = tx('请选择尾款账单的到期日。','Choose a due date for the balance invoice.'); return; }
   const customerId = oneCompany(rows);
   if (customerId == null) return;
   if (rows.some((order) => order.payment_status !== "deposit_received" || !goodsArrived(order))) {
@@ -1036,13 +1038,14 @@ function settleSelected() {
     order_ids: orderIds,
     rebate_ids: rebateIds,
     additional_items: additionalItems,
-    operation_key: stableKey(JSON.stringify({ settle: orderIds, rebates: rebateIds, items: additionalItems, evidence: settlementEvidence.value.trim() })),
+    operation_key: stableKey(JSON.stringify({ settle: orderIds, rebates: rebateIds, items: additionalItems, evidence: settlementEvidence.value.trim(), due_date: balanceDueDate.value })),
     rules_evidence: settlementEvidence.value.trim(),
     billing_basis: "all_arrived_remaining_total" as const,
+    due_date: balanceDueDate.value || null,
   };
   return act(async () => {
     const invoice = await request<Invoice>("operations/settlements", body);
-    operationKeys.delete(JSON.stringify({ settle: orderIds, rebates: rebateIds, items: additionalItems, evidence: settlementEvidence.value.trim() }));
+    operationKeys.delete(JSON.stringify({ settle: orderIds, rebates: rebateIds, items: additionalItems, evidence: settlementEvidence.value.trim(), due_date: balanceDueDate.value }));
     notice.value = tx(
       `已生成尾款草稿 ${invoiceLabel(invoice)}，金额 ${invoice.currency} ${invoice.amount}。未收定金或批次未到仓会被拒绝。发送仍是另一步。`,
       `Balance draft ${invoiceLabel(invoice)} created for ${invoice.currency} ${invoice.amount}. An unpaid deposit or a shipment not yet arrived is refused. Sending stays a separate step.`,
@@ -1050,6 +1053,7 @@ function settleSelected() {
     picked.value=[];
     balanceRebatePick.value=[];
     balanceAdditionalItems.value=[];
+    balanceDueDate.value="";
     balanceInvoiceOpen.value=false;
   });
 }
@@ -1069,6 +1073,7 @@ function openBalanceInvoiceForPicked() {
   picked.value = rows.map((order) => order.id);
   balanceRebatePick.value = [];
   balanceAdditionalItems.value = [];
+  balanceDueDate.value = "";
   if (!settlementEvidence.value.trim() || settlementEvidence.value === lastAutoEvidence) fillEvidence();
   balanceInvoiceOpen.value = true;
 }
@@ -1913,6 +1918,7 @@ async function loadOrderProviders(orderId: string) {
             <div class="balance-invoice-row balance-invoice-row-head"><span>{{ tx('订单','Order') }}</span><span>{{ tx('订单总额','Order total') }}</span><span>{{ tx('已收定金','Deposit received') }}</span><span>{{ tx('尾款','Balance incl. GST') }}</span></div>
             <div v-for="order in balanceSelectedOrders" :key="order.id" class="balance-invoice-row"><span><strong>{{ order.order_number || order.id }}</strong><small>{{ order.project_name }}</small></span><span>{{ quoteMoney(order.total, order.currency || 'NZD') }}</span><span>{{ quoteMoney(order.deposit ?? depositInvoiceFor(order)?.amount ?? '0', order.currency || 'NZD') }}</span><strong>{{ quoteMoney(String(Number(order.total || 0) - Number(order.deposit ?? depositInvoiceFor(order)?.amount ?? '0')), order.currency || 'NZD') }}</strong></div>
           </div>
+          <label class="balance-due-date">{{ tx('付款到期日','Due date') }}<input v-model="balanceDueDate" type="date" required /></label>
           <section class="balance-additions"><div class="balance-section-title"><h3>{{ tx('额外项目','Additional charges') }}</h3><button type="button" class="secondary" @click="addBalanceCharge">＋ {{ tx('添加项目','Add item') }}</button></div><p>{{ tx('可添加安装费等项目，输入金额均按含 GST 处理。','Add items such as installation. Enter amounts including GST.') }}</p><div v-for="item in balanceAdditionalItems" :key="item.id" class="balance-charge-row"><input v-model="item.description" maxlength="200" :placeholder="tx('项目说明，例如安装费','Description, e.g. installation')" /><label>{{ balancePreview.currency }} <input v-model="item.amount" inputmode="decimal" type="number" min="0.01" step="0.01" :aria-label="tx('含 GST 金额','GST-inclusive amount')" /></label><button type="button" class="balance-remove" :aria-label="tx('删除项目','Remove item')" @click="balanceAdditionalItems=balanceAdditionalItems.filter(row=>row.id!==item.id)">×</button></div><p v-if="!balanceAdditionalItems.length" class="balance-no-items">{{ tx('没有额外项目','No additional charges') }}</p></section>
           <section class="balance-additions"><div class="balance-section-title"><h3>{{ tx('抵扣返利','Apply rebate') }}</h3><button type="button" class="secondary" @click="balanceRebatePick=[]">{{ tx('清除选择','Clear') }}</button></div><div v-if="balanceRebates.length" class="balance-rebate-list"><label v-for="credit in balanceRebates" :key="credit.id" class="balance-rebate-option"><input type="checkbox" v-model="balanceRebatePick" :value="credit.id" /><span><strong>{{ credit.month }}</strong><small>{{ credit.evidence }}</small></span><b>{{ tx('可用','Available') }} {{ quoteMoney(credit.remaining, credit.currency) }}</b></label></div><p v-else class="balance-no-items">{{ tx('该客户目前没有尚未 claim 且可用于本账单的返利。','No unclaimed rebate is currently available for this customer.') }}</p></section>
           <div class="balance-invoice-summary"><div><span>{{ tx('订单尾款小计','Order balance subtotal') }}</span><strong>{{ quoteMoney(balancePreview.orderBalances, balancePreview.currency) }}</strong></div><div v-if="Number(balancePreview.extras)>0"><span>{{ tx('额外项目','Additional charges') }}</span><strong>{{ quoteMoney(balancePreview.extras, balancePreview.currency) }}</strong></div><div v-if="Number(balancePreview.rebate)>0"><span>{{ tx('返利抵扣','Rebate credit') }}</span><strong>−{{ quoteMoney(balancePreview.rebate, balancePreview.currency) }}</strong></div><div class="gst-row"><span>{{ tx('其中 GST','Includes GST') }}</span><strong>{{ quoteMoney(balancePreview.gst, balancePreview.currency) }}</strong></div><div class="amount-due-row"><span>{{ tx('应付总额（含 GST）','Amount due (incl. GST)') }}</span><strong>{{ quoteMoney(balancePreview.due, balancePreview.currency) }}</strong></div></div>
@@ -2580,6 +2586,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .staff-order-dialog::backdrop{background:#17251fcc}
 .staff-order-dialog-close{position:absolute;right:12px;top:8px;z-index:2;min-width:34px;min-height:30px;height:30px;padding:2px 8px;background:#fff;color:#30463b;border:1px solid #d5ddd6}
 .staff-order-dialog :deep(.staff-order-entry){padding:8px;border:0;box-shadow:none}
+.balance-due-date{display:grid;gap:5px;margin:14px 0 4px;font-size:12px;font-weight:650;color:#34503f}.balance-due-date input{width:min(280px,100%);height:38px;padding:6px 9px;border:1px solid #ccd7cf;border-radius:6px;background:#fff;font:inherit}
 .balance-invoice-backdrop{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:20px;background:#14241fcc}
 .balance-invoice-modal{width:min(900px,96vw);max-height:92dvh;overflow:auto;padding:22px;border:1px solid #d8e2da;border-radius:14px;background:#fff;box-shadow:0 24px 70px #081c1440;color:#20352b}
 .balance-invoice-head,.balance-section-title,.balance-invoice-actions{display:flex;align-items:center;justify-content:space-between;gap:14px}
@@ -2671,5 +2678,8 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .staff-order-dialog::backdrop{background:#17251fcc}
 .staff-order-dialog-close{position:absolute;right:12px;top:8px;z-index:2;min-width:34px;min-height:30px;height:30px;padding:2px 8px;background:#fff;color:#30463b;border:1px solid #d5ddd6}
 .staff-order-dialog :deep(.staff-order-entry){padding:8px;border:0;box-shadow:none}
+.orders-overview-table td:nth-child(2){overflow:visible;text-overflow:clip}
+.orders-overview-table .overview-order-link{width:100%;max-width:none;min-width:0;overflow:visible!important;white-space:normal!important;text-overflow:clip!important;border-radius:0!important;clip-path:none!important;box-shadow:none!important;}
+.orders-overview-table .overview-order-link strong{max-width:none!important;overflow:visible!important;white-space:normal!important;text-overflow:clip!important;overflow-wrap:anywhere;word-break:break-word;}
 @media(max-width:700px){.order-overview{height:auto;max-height:none;min-height:60dvh}.overview-progress-edit{justify-content:flex-start;flex-wrap:wrap}.overview-progress-edit label{grid-template-columns:1fr}.order-global-search{max-width:none}.order-global-search input{width:100%}.shipment-workspace{height:auto;max-height:none;min-height:70dvh}.shipment-overview-scroll{min-height:280px}.staff-order-dialog{width:96vw;max-height:96dvh;padding-inline:5px}}
 </style>

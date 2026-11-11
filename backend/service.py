@@ -264,6 +264,9 @@ def catalog_product(d):
     images=d.get('image_urls') if 'image_urls' in d else ([d['image_url']] if d.get('image_url') else defaults)
     images=images or []
     result={'published':True,'unit':'mm','width_min':None,'width_max':None,'height_min':None,'height_max':None,'colors':[],'controls':[],**d}
+    result.setdefault('product_category', 'Interior blinds' if result.get('category') == 'blinds' else 'Interior shutters')
+    result.setdefault('pricing_method', 'matrix' if result.get('category') == 'blinds' else 'per_sqm')
+    result.setdefault('pricing_matrix', {})
     result.update(image_urls=images,image_url=images[0] if images else '')
     return result
 
@@ -275,8 +278,12 @@ class ProductEdit(BaseModel):
     description_zh:str=Field(default='',max_length=3000)
     description_en:str=Field(default='',max_length=3000)
     category:str=Field(min_length=1,max_length=80)
+    product_category:str=Field(default='',max_length=80)
+    pricing_method:Literal['per_sqm','matrix']='per_sqm'
+    pricing_matrix:dict[str,dict[str,str]]=Field(default_factory=dict)
     sample:bool=True
     published:bool=False
+    orderable:bool=True
     image_url:str=Field(default='',max_length=300)
     image_urls:list[str]=Field(default_factory=list,max_length=12)
     unit:Literal['mm','inch']='mm'
@@ -294,7 +301,9 @@ class ProductEdit(BaseModel):
         images=self.image_urls or ([self.image_url] if self.image_url else [])
         if any(not re.fullmatch(r'/(?:images|api/media)/[a-zA-Z0-9_.-]+\.(?:png|jpg|jpeg|webp)',x) for x in images+([self.image_url] if self.image_url else [])):raise ValueError('Choose local PNG, JPEG or WebP product images')
         self.image_urls=list(dict.fromkeys(images));self.image_url=self.image_urls[0] if self.image_urls else ''
-        if self.published and not self.image_url:raise ValueError('Choose a cover image before showing the product on the website')
+        self.product_category=self.product_category.strip()
+        if not self.product_category:self.product_category='Interior blinds' if self.category=='blinds' else 'Interior shutters'
+        if len(self.pricing_matrix)>25 or any(len(row)>25 for row in self.pricing_matrix.values()):raise ValueError('Pricing matrix exceeds supported dimensions')
         for low,high in [(self.width_min,self.width_max),(self.height_min,self.height_max)]:
             if low is not None and high is not None and low>high:raise ValueError('Minimum dimensions cannot exceed maximum')
         self.colors=[x.strip() for x in self.colors if x.strip()]
