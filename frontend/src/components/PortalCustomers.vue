@@ -233,15 +233,15 @@ async function save() {
         <div class="segmented" role="radiogroup">
           <label v-for="kind in (['wholesale','retail'] as CustomerType[])" :key="kind" :class="{ on: account.customer_type === kind }"><input v-model="account.customer_type" type="radio" :value="kind" />{{ typeLabel(kind) }}</label>
         </div>
-        <p class="hint">{{ account.customer_type === "wholesale" ? tx("批发单号 = 客户代码-工地名，必须填写客户代码。", "Wholesale order numbers are CODE-job name, so a customer code is required.") : tx("零售单号自动生成为 R+日期+当日序号+字母。", "Retail order numbers are generated as R + date + daily sequence + letter.") }}</p>
+        <p class="hint">{{ account.customer_type === "wholesale" ? tx("客户代码可暂时留空；补上代码后才能下批发订单。", "Customer code can be added later; wholesale ordering stays disabled until it is set.") : tx("零售单号自动生成为 R+日期+当日序号+字母。", "Retail order numbers are generated as R + date + daily sequence + letter.") }}</p>
       </fieldset>
       <div class="form-grid">
         <label>{{ tx("公司", "Company") }}<input v-model="account.company" required /></label>
-        <label v-if="account.customer_type === 'wholesale'">{{ tx("批发客户代码", "Wholesale customer code") }}<input v-model="account.customer_code" required maxlength="50" :placeholder="tx('如 AA、CF', 'e.g. AA, CF')" /></label>
-        <label>{{ tx("联系人", "Contact") }}<input v-model="account.contact_name" required /></label>
-        <label>{{ tx("电话", "Phone") }}<input v-model="account.phone" required /></label>
+        <label v-if="account.customer_type === 'wholesale'">{{ tx("批发客户代码", "Wholesale customer code") }}<input v-model="account.customer_code" maxlength="50" :placeholder="tx('如 AA、CF', 'e.g. AA, CF')" /></label>
+        <label>{{ tx("联系人", "Contact") }}<input v-model="account.contact_name" /></label>
+        <label>{{ tx("电话", "Phone") }}<input v-model="account.phone" /></label>
         <label>{{ tx("邮箱（可待补）", "Email (optional)") }}<input v-model="account.email" type="email" /></label>
-        <label class="wide">{{ tx("公司地址", "Company address") }}<input v-model="account.company_address" required /></label>
+        <label class="wide">{{ tx("公司地址", "Company address") }}<input v-model="account.company_address" /></label>
       </div>
       <h4>{{ tx("门户登录", "Portal login") }}</h4>
       <div class="form-grid">
@@ -326,10 +326,10 @@ async function save() {
             <div class="form-grid">
               <label>{{ tx("公司", "Company") }}<input v-model="draft.company" required /></label>
               <label>{{ tx("批发客户代码", "Wholesale customer code") }}<input v-model="draft.customer_code" maxlength="50" :required="draft.customer_type === 'wholesale'" :placeholder="tx('如 AA、CF', 'e.g. AA, CF')" /></label>
-              <label>{{ tx("联系人", "Contact") }}<input v-model="draft.contact_name" required /></label>
-              <label>{{ tx("电话", "Phone") }}<input v-model="draft.phone" required /></label>
+              <label>{{ tx("联系人", "Contact") }}<input v-model="draft.contact_name" /></label>
+              <label>{{ tx("电话", "Phone") }}<input v-model="draft.phone" /></label>
               <label>{{ tx("邮箱", "Email") }}<input v-model="draft.email" type="email" /></label>
-              <label class="wide">{{ tx("公司地址", "Company address") }}<input v-model="draft.company_address" required /></label>
+              <label class="wide">{{ tx("公司地址", "Company address") }}<input v-model="draft.company_address" /></label>
             </div>
             <div class="actions"><button type="submit">{{ tx("保存资料", "Save profile") }}</button><button type="button" class="secondary" @click="editing = false">{{ tx("取消", "Cancel") }}</button></div>
           </form>

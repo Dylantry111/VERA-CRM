@@ -557,10 +557,10 @@ class Input(BaseModel):
 class Profile(Input):
     customer_id: int | None = None
     company: str = Field(min_length=1, max_length=200)
-    contact_name: str = Field(min_length=1, max_length=200)
+    contact_name: str = Field(default='', max_length=200)
     email: str = Field(max_length=200)
-    phone: str = Field(min_length=1, max_length=100)
-    company_address: str = Field(min_length=1, max_length=1000)
+    phone: str = Field(default='', max_length=100)
+    company_address: str = Field(default='', max_length=1000)
     username: str = Field(min_length=3, max_length=100, pattern=r'^[A-Za-z0-9_.@-]+$')
     password: str = Field(min_length=8, max_length=200)
     customer_type: Literal['retail', 'wholesale'] = 'wholesale'
@@ -699,10 +699,10 @@ class PricingKnowledgeDraftEdit(Input):
 
 class ProfileEdit(Input):
     company: str = Field(min_length=1,max_length=200)
-    contact_name: str = Field(min_length=1,max_length=200)
+    contact_name: str = Field(max_length=200)
     email: str
-    phone: str = Field(min_length=1,max_length=100)
-    company_address: str = Field(min_length=1,max_length=1000)
+    phone: str = Field(max_length=100)
+    company_address: str = Field(max_length=1000)
     customer_type: Literal['retail', 'wholesale'] | None = None
     customer_code: str | None = Field(default=None, max_length=50)
     nzbn: str | None = Field(default=None, max_length=13)
