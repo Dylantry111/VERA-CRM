@@ -1250,14 +1250,22 @@ def register(app, s):
                         raise HTTPException(409,'No imported price rule for this product; display-only or mixed legacy product')
                     raw=line.model_dump(mode='json')
                     # Historical quotations sometimes use a customer-selected colour
-                    # that is outside the current published colour list. Keep that exact
-                    # value on the imported order while using the unchanged price rule.
-                    if allow_custom_colour and rule and raw.get('options', {}).get('colour') in {'Customize Colour', 'Customise Colour'}:
-                        rule = {**rule, 'schema': [
-                            {**field, 'choices': [*(field.get('choices') or []), raw['options']['colour']]}
-                            if field.get('key') == 'colour' else field
-                            for field in rule.get('schema', [])
-                        ]}
+                    # or the required track frame outside the current published choices.
+                    # Keep the exact quote values on imported orders; pricing is unchanged.
+                    if allow_custom_colour and rule:
+                        imported_options = raw.get('options', {})
+                        custom_fields = set()
+                        if imported_options.get('colour') in {'Customize Colour', 'Customise Colour'}:
+                            custom_fields.add('colour')
+                        if (imported_options.get('frame') == 'Track System' and
+                                imported_options.get('opening_style') in {'Tracked by Fold', 'Tracked Sliding'}):
+                            custom_fields.add('frame')
+                        if custom_fields:
+                            rule = {**rule, 'schema': [
+                                {**field, 'choices': [*(field.get('choices') or []), imported_options[field['key']]]}
+                                if field.get('key') in custom_fields else field
+                                for field in rule.get('schema', [])
+                            ]}
                     selected_adjustment=(adjustments or {}).get(str(n+1))
                     if selected_adjustment and Decimal(selected_adjustment.get('discount','0')) not in {Decimal(0),*[Decimal(v) for v in template['discounts'] if v is not None]}:
                         raise HTTPException(422,'Select a discount defined by the imported workbook')
