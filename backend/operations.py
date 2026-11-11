@@ -993,6 +993,15 @@ class MailboxSend(Input):
     body: str = Field(min_length=1, max_length=100000)
     html_body: str | None = Field(default=None, max_length=1500000)
     reply_to: str = Field(default='', max_length=500)
+    purpose: Literal['existing_notice', 'commercial_update', 'first_contact'] = 'existing_notice'
+    consent_confirmed: bool = False
+    consent_source: str = Field(default='', max_length=500)
+
+    @model_validator(mode='after')
+    def commercial_mail_has_consent_basis(self):
+        if self.purpose != 'existing_notice' and (not self.consent_confirmed or not self.consent_source.strip()):
+            raise ValueError('Commercial email requires confirmed recipient consent and a recorded consent source')
+        return self
 
 
 class MailTemplate(Input):
@@ -2303,7 +2312,19 @@ def register(app, s):
         try:
             message_id = mailbox_service.send(email_address, password, ', '.join(recipients), body.subject.strip(),
                                               body.body, ', '.join(carbon), body.reply_to, body.html_body)
-            return {'sent': True, 'message_id': message_id}
+            activity_recorded = True
+            try:
+                with s.db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    activity = {'id': 'mail-send:' + secrets.token_urlsafe(18), 'sent_at': s.now(), 'sent_by': actor,
+                                'from': email_address, 'recipients': recipients, 'subject': body.subject.strip(),
+                                'message_id': message_id, 'purpose': body.purpose,
+                                'consent_confirmed': body.consent_confirmed,
+                                'consent_source': body.consent_source.strip() if body.purpose != 'existing_notice' else ''}
+                    put(c, 'mail_activity', activity)
+            except Exception:
+                activity_recorded = False
+            return {'sent': True, 'activity_recorded': activity_recorded, 'message_id': message_id}
         except mailbox_service.MailboxError as exc:
             raise HTTPException(502, str(exc)) from None
 

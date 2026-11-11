@@ -211,7 +211,7 @@ async function sendMessage() {
     const htmlBody = `<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#304451\">${escapeHtml(compose.body).replace(/\r?\n/g, "<br>")}${signatureHtml}${unsubscribe}</div>`;
     let sentCount = 0;
     for (const recipient of recipients) {
-      await request("operations/mailbox/send", { ...compose, body: plainBody, to: recipient, cc: recipients.length > 1 ? "" : compose.cc, html_body: htmlBody });
+      await request("operations/mailbox/send", { ...compose, body: plainBody, to: recipient, cc: recipients.length > 1 ? "" : compose.cc, html_body: htmlBody, purpose: messagePurpose.value, consent_confirmed: consentConfirmed.value, consent_source: consentSource.value.trim() });
       sentCount++;
     }
     composeOpen.value = false;
