@@ -1257,6 +1257,10 @@ def register(app, s):
                         custom_fields = set()
                         if imported_options.get('colour') in {'Customize Colour', 'Customise Colour'}:
                             custom_fields.add('colour')
+                        # Older quotations used Close-Sliding before tracked sliding
+                        # became a separately priced opening-style add-on.
+                        if imported_options.get('opening_style') == 'Close-Sliding':
+                            custom_fields.add('opening_style')
                         if (imported_options.get('frame') == 'Track System' and
                                 imported_options.get('opening_style') in {'Tracked by Fold', 'Tracked Sliding'}):
                             custom_fields.add('frame')
