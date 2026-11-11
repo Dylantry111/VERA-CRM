@@ -1201,7 +1201,7 @@ def register(app, s):
             raise HTTPException(409, 'Operation key already used for different data')
         return d
 
-    def calculate(c, body, adjustments=None):
+    def calculate(c, body, adjustments=None, allow_custom_colour=False):
         active = c.execute('SELECT data FROM operations_records WHERE id=?',('template-current',)).fetchone()
         if active:
             template_id = json.loads(active['data'])['template_id']
@@ -1249,6 +1249,15 @@ def register(app, s):
                     if not p.get('published') or not rule:
                         raise HTTPException(409,'No imported price rule for this product; display-only or mixed legacy product')
                     raw=line.model_dump(mode='json')
+                    # Historical quotations sometimes use a customer-selected colour
+                    # that is outside the current published colour list. Keep that exact
+                    # value on the imported order while using the unchanged price rule.
+                    if allow_custom_colour and rule and raw.get('options', {}).get('colour') in {'Customize Colour', 'Customise Colour'}:
+                        rule = {**rule, 'schema': [
+                            {**field, 'choices': [*(field.get('choices') or []), raw['options']['colour']]}
+                            if field.get('key') == 'colour' else field
+                            for field in rule.get('schema', [])
+                        ]}
                     selected_adjustment=(adjustments or {}).get(str(n+1))
                     if selected_adjustment and Decimal(selected_adjustment.get('discount','0')) not in {Decimal(0),*[Decimal(v) for v in template['discounts'] if v is not None]}:
                         raise HTTPException(422,'Select a discount defined by the imported workbook')
@@ -1906,7 +1915,7 @@ def register(app, s):
             for item in body.orders:
                 profile(c,item.customer_id)
                 payload=staff_order_payload(item)
-                priced=calculate(c,payload)
+                priced=calculate(c,payload,allow_custom_colour=bool(item.historical_confirmed_deposit_date))
                 if priced.get('total') is None:
                     raise HTTPException(409,'Confirmed price sheet is required for these product series')
                 previews.append({'customer_id':item.customer_id,'project_name':item.project_name,
@@ -1923,7 +1932,7 @@ def register(app, s):
             for item in body.orders:
                 customer=profile(c,item.customer_id)
                 payload=staff_order_payload(item)
-                priced=calculate(c,payload)
+                priced=calculate(c,payload,allow_custom_colour=bool(item.historical_confirmed_deposit_date))
                 if priced.get('total') is None:
                     raise HTTPException(409,'Confirmed price sheet is required for these product series')
                 digest=bodyhash(item)
