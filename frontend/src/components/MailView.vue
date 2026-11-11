@@ -350,7 +350,8 @@ onMounted(() => void loadStatus());
 .mail-connect-card input,.compose-card input,.compose-card textarea,.compose-card select{box-sizing:border-box;width:100%;min-height:38px;padding:8px 10px;border:1px solid #d3dfe5;border-radius:6px;background:#fff;color:#304451;font:inherit;font-size:13px}
 .mail-connect-card form .mail-primary{width:max-content}.mail-help{margin:0;color:#73838c;font-size:11px;line-height:1.5}
 .mail-key-notice{display:grid;gap:5px;margin:12px 0;padding:12px;border:1px solid #efd8ae;border-radius:8px;background:#fff9eb;color:#795b2d;font-size:12px}
-.compose-backdrop{background:#263945bb}.compose-card{display:grid;gap:12px;box-sizing:border-box;width:min(740px,96vw);max-height:94dvh;overflow:auto;padding:19px;border:1px solid #d2dde3;border-radius:14px;background:#fff;color:#304451;box-shadow:0 22px 70px #182d3a55}
+.compose-backdrop{position:fixed;inset:0;z-index:1400;display:grid;place-items:center;overflow-y:auto;padding:16px;background:#263945bb}
+.compose-card{display:grid;gap:12px;box-sizing:border-box;width:min(740px,96vw);max-height:calc(100dvh - 32px);overflow:auto;padding:19px;border:1px solid #d2dde3;border-radius:14px;background:#fff;color:#304451;box-shadow:0 22px 70px #182d3a55}
 .compose-card>header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:12px;border-bottom:1px solid #e5ebee}
 .compose-card>header h2{margin:0;color:#304451;font-size:20px}.compose-card>header button{display:grid;place-items:center;width:36px;height:36px;border:1px solid #d6e0e5;border-radius:50%;background:#fff;color:#405969;cursor:pointer}
 .compose-card>label{display:grid;gap:5px;color:#425966;font-size:12px;font-weight:650}.compose-card textarea{resize:vertical;line-height:1.5}
