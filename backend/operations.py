@@ -673,7 +673,12 @@ class Project(Input):
         return self
 
 
-class StaffOrder(Project):
+class StaffOrder(Input):
+    project_name: str = Field(min_length=1, max_length=200)
+    site_address: str = Field(default='', max_length=1000)
+    lines: list[Window] = Field(min_length=1, max_length=200)
+    submission_key: str = Field(min_length=8, max_length=100)
+    installation_required: bool = False
     customer_id: int = Field(gt=0)
     submit: bool = False
     historical_confirmed_deposit_date: str | None = None
@@ -682,6 +687,12 @@ class StaffOrder(Project):
     @classmethod
     def valid_historical_confirmed_deposit_date(cls, v):
         return None if v in (None, '') else iso_date(v)
+
+    @model_validator(mode='after')
+    def address_for_installation(self):
+        if self.installation_required and not self.site_address and not self.historical_confirmed_deposit_date:
+            raise ValueError('Enter the installation address when installation is required')
+        return self
 
 
 class StaffOrderBatch(Input):
