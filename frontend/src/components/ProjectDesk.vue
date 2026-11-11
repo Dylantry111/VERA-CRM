@@ -2547,17 +2547,17 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .overview-progress-edit button{min-height:34px;padding:5px 10px;white-space:nowrap}
 .overview-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
 .orders-overview-table{width:100%;min-width:1430px;table-layout:fixed;border-collapse:separate;border-spacing:0}
-.orders-overview-table col.col-select{width:38px}.orders-overview-table col.col-order-id{width:205px}.orders-overview-table col.col-customer{width:145px}.orders-overview-table col.col-submitted{width:108px}.orders-overview-table col.col-status{width:125px}.orders-overview-table col.col-payment{width:128px}.orders-overview-table col.col-money{width:112px}.orders-overview-table col.col-date{width:112px}.orders-overview-table col.col-batch{width:128px}
+.orders-overview-table col.col-select{width:38px}.orders-overview-table col.col-order-id{width:230px}.orders-overview-table col.col-customer{width:145px}.orders-overview-table col.col-submitted{width:108px}.orders-overview-table col.col-status{width:125px}.orders-overview-table col.col-payment{width:128px}.orders-overview-table col.col-money{width:112px}.orders-overview-table col.col-date{width:112px}.orders-overview-table col.col-batch{width:128px}
 .orders-overview-table th,.orders-overview-table td{min-width:0;max-width:0;overflow:hidden;text-overflow:ellipsis;padding:5px 6px}
 .orders-overview-table th{vertical-align:bottom}
 .orders-overview-table th:first-child{min-width:0;width:38px}
-.orders-overview-table .sort-heading{max-width:100%;min-height:24px;font-size:11px;letter-spacing:-.02em;overflow:hidden;text-overflow:ellipsis}
+.orders-overview-table .sort-heading{display:inline-flex;align-items:center;gap:4px;max-width:100%;min-height:24px!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;color:#304b3c!important;font-size:11px;letter-spacing:-.02em;overflow:visible;text-overflow:clip;white-space:nowrap}
 .orders-overview-table .overview-column-filter{box-sizing:border-box;width:100%;min-width:0;max-width:100%;height:29px;min-height:29px!important;margin:3px 0 0!important;padding:3px 5px!important;font-size:11px!important}
 .orders-overview-table .compact-id-filter{width:120px;max-width:100%}
 .orders-overview-table td:first-child{text-align:center}
 .orders-overview-table td:first-child input{width:16px;height:16px;min-height:16px}
 .orders-overview-table .overview-order-link{display:block;max-width:100%;overflow:hidden}
-.orders-overview-table .overview-order-link strong,.orders-overview-table .overview-order-link small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orders-overview-table .overview-order-link strong{display:block;max-width:none;overflow:visible;text-overflow:clip;white-space:normal;overflow-wrap:anywhere;line-height:1.25}.orders-overview-table .overview-order-link small{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .orders-overview-table td small{font-size:10px}
 .orders-overview-table .order-progress-pill,.orders-overview-table .payment-progress-pill{max-width:100%;overflow:hidden;text-overflow:ellipsis;padding-inline:6px;font-size:10px}
 .shipment-list-heading{display:flex;justify-content:space-between;align-items:center;flex:none;margin:2px 0 5px}
@@ -2638,17 +2638,17 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .overview-progress-edit button{min-height:34px;padding:5px 10px;white-space:nowrap}
 .overview-scroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
 .orders-overview-table{width:100%;min-width:1430px;table-layout:fixed;border-collapse:separate;border-spacing:0}
-.orders-overview-table col.col-select{width:38px}.orders-overview-table col.col-order-id{width:205px}.orders-overview-table col.col-customer{width:145px}.orders-overview-table col.col-submitted{width:108px}.orders-overview-table col.col-status{width:125px}.orders-overview-table col.col-payment{width:128px}.orders-overview-table col.col-money{width:112px}.orders-overview-table col.col-date{width:112px}.orders-overview-table col.col-batch{width:128px}
+.orders-overview-table col.col-select{width:38px}.orders-overview-table col.col-order-id{width:230px}.orders-overview-table col.col-customer{width:145px}.orders-overview-table col.col-submitted{width:108px}.orders-overview-table col.col-status{width:125px}.orders-overview-table col.col-payment{width:128px}.orders-overview-table col.col-money{width:112px}.orders-overview-table col.col-date{width:112px}.orders-overview-table col.col-batch{width:128px}
 .orders-overview-table th,.orders-overview-table td{min-width:0;max-width:0;overflow:hidden;text-overflow:ellipsis;padding:5px 6px}
 .orders-overview-table th{vertical-align:bottom}
 .orders-overview-table th:first-child{min-width:0;width:38px}
-.orders-overview-table .sort-heading{max-width:100%;min-height:24px;font-size:11px;letter-spacing:-.02em;overflow:hidden;text-overflow:ellipsis}
+.orders-overview-table .sort-heading{display:inline-flex;align-items:center;gap:4px;max-width:100%;min-height:24px!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;color:#304b3c!important;font-size:11px;letter-spacing:-.02em;overflow:visible;text-overflow:clip;white-space:nowrap}
 .orders-overview-table .overview-column-filter{box-sizing:border-box;width:100%;min-width:0;max-width:100%;height:29px;min-height:29px!important;margin:3px 0 0!important;padding:3px 5px!important;font-size:11px!important}
 .orders-overview-table .compact-id-filter{width:120px;max-width:100%}
 .orders-overview-table td:first-child{text-align:center}
 .orders-overview-table td:first-child input{width:16px;height:16px;min-height:16px}
 .orders-overview-table .overview-order-link{display:block;max-width:100%;overflow:hidden}
-.orders-overview-table .overview-order-link strong,.orders-overview-table .overview-order-link small{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.orders-overview-table .overview-order-link strong{display:block;max-width:none;overflow:visible;text-overflow:clip;white-space:normal;overflow-wrap:anywhere;line-height:1.25}.orders-overview-table .overview-order-link small{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .orders-overview-table td small{font-size:10px}
 .orders-overview-table .order-progress-pill,.orders-overview-table .payment-progress-pill{max-width:100%;overflow:hidden;text-overflow:ellipsis;padding-inline:6px;font-size:10px}
 .shipment-list-heading{display:flex;justify-content:space-between;align-items:center;flex:none;margin:2px 0 5px}
