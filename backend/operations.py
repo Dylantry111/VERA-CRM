@@ -1261,8 +1261,7 @@ def register(app, s):
                         # became a separately priced opening-style add-on.
                         if imported_options.get('opening_style') == 'Close-Sliding':
                             custom_fields.add('opening_style')
-                        if (imported_options.get('frame') == 'Track System' and
-                                imported_options.get('opening_style') in {'Tracked by Fold', 'Tracked Sliding', 'Close-Sliding'}):
+                        if imported_options.get('frame'):
                             custom_fields.add('frame')
                         if custom_fields:
                             rule = {**rule, 'schema': [
