@@ -676,6 +676,12 @@ class Project(Input):
 class StaffOrder(Project):
     customer_id: int = Field(gt=0)
     submit: bool = False
+    historical_confirmed_deposit_date: str | None = None
+
+    @field_validator('historical_confirmed_deposit_date')
+    @classmethod
+    def valid_historical_confirmed_deposit_date(cls, v):
+        return None if v in (None, '') else iso_date(v)
 
 
 class StaffOrderBatch(Input):
@@ -1871,13 +1877,24 @@ def register(app, s):
             addons=template.get('addons',[]) if template else []
             return {'products':products,'addons':addons,'pricing_status':'configured' if configured else 'rules_required'}
 
+    def staff_order_payload(item):
+        data=item.model_dump(exclude={'customer_id','submit','historical_confirmed_deposit_date'})
+        if item.historical_confirmed_deposit_date and item.installation_required and not item.site_address:
+            # Historical quote imports may not contain a job address; retain installation pricing
+            # and let staff complete the address later. Customer submissions still require it.
+            data['installation_required']=False
+            payload=Project(**data)
+            payload.installation_required=True
+            return payload
+        return Project(**data)
+
     @app.post('/api/operations/orders/staff/preview')
     def preview_staff_orders(body: StaffOrderBatch, actor=Depends(s.require_admin)):
         with s.db() as c:
             previews=[]
             for item in body.orders:
                 profile(c,item.customer_id)
-                payload=Project(**item.model_dump(exclude={'customer_id','submit'}))
+                payload=staff_order_payload(item)
                 priced=calculate(c,payload)
                 if priced.get('total') is None:
                     raise HTTPException(409,'Confirmed price sheet is required for these product series')
@@ -1894,7 +1911,7 @@ def register(app, s):
             prepared=[]
             for item in body.orders:
                 customer=profile(c,item.customer_id)
-                payload=Project(**item.model_dump(exclude={'customer_id','submit'}))
+                payload=staff_order_payload(item)
                 priced=calculate(c,payload)
                 if priced.get('total') is None:
                     raise HTTPException(409,'Confirmed price sheet is required for these product series')
@@ -1905,21 +1922,50 @@ def register(app, s):
                     prepared.append(enrich(c,existing))
                     continue
                 d={**priced,'id':oid,'order_number':assign_business_number(c,customer,payload.project_name),
-                   'order_number_confirmed':False,'customer_id':item.customer_id,'company':customer['company'],
+                   'order_number_confirmed':bool(item.historical_confirmed_deposit_date),'customer_id':item.customer_id,'company':customer['company'],
                    'customer_type':customer.get('customer_type') or 'wholesale','contact_name':customer['contact_name'],
                    'email':customer['email'],'phone':customer['phone'],'company_address':customer['company_address'],
                    'project_name':payload.project_name,'site_address':payload.site_address,
-                   'status':'pending_review' if item.submit else 'draft','payment_status':'deposit_unpaid',
+                   'status':'accepted' if item.historical_confirmed_deposit_date else ('pending_review' if item.submit else 'draft'),
+                   'payment_status':'deposit_received' if item.historical_confirmed_deposit_date else 'deposit_unpaid',
                    'history':[],'created_at':s.now(),'order_date':None,'request_hash':digest,
                    'installation_required':payload.installation_required,'adjustments':{}}
-                d['lead_time']=lead_time_for(d['lines'])
-                event(d,'submitted' if item.submit else 'draft_created',actor)
-                prepared.append((d,item.customer_id))
+                historical_at = None
+                if item.historical_confirmed_deposit_date:
+                    local_tz = ZoneInfo(os.getenv('VERA_TIMEZONE', 'Pacific/Auckland'))
+                    historical_at = datetime.fromisoformat(item.historical_confirmed_deposit_date).replace(tzinfo=local_tz).isoformat()
+                    d.update(created_at=historical_at, accepted_at=historical_at, deposit_paid_at=historical_at,
+                             order_date=item.historical_confirmed_deposit_date)
+                    d['lead_time'] = {**lead_time_for(d['lines']), 'starts_at': historical_at}
+                    start = datetime.fromisoformat(historical_at).astimezone(local_tz).date()
+                    d['eta'] = (start + timedelta(weeks=int(d['lead_time']['weeks']))).isoformat()
+                    d['eta_source'] = 'deposit'
+                    d['history'] = [
+                        {'action':'historical_quote_imported','actor':actor,'created_at':historical_at,'quote_date':item.historical_confirmed_deposit_date},
+                        {'action':'review_accepted','actor':actor,'created_at':historical_at,'source':'historical_quote_import'},
+                        {'action':'deposit_received','actor':actor,'created_at':historical_at,'source':'historical_quote_import','eta':d['eta']},
+                    ]
+                    invoice={'id':'deposit:'+oid,'customer_id':item.customer_id,'kind':'deposit','order_ids':[oid],
+                             'amount':d.get('deposit') or deposit_amount(d['total']),'currency':d['currency'],'tax_basis':d['tax_basis'],
+                             'tax_rate':d.get('tax_rate','0.15'),'deposit_rate':str(d.get('deposit_rate') or DEPOSIT_RATE),
+                             'rounding':'ROUND_UP_2DP','rule_source':'Historical quote imported at owner-confirmed deposit date',
+                             'status':'draft','payment_status':'received','created_at':historical_at,'received_at':historical_at,
+                             'received_by':actor,'actor':actor,'template':invoice_template(c),
+                             'payment_details':payment_view(payment_details(c)),
+                             'lines':[{'order_id':oid,'amount':d.get('deposit') or deposit_amount(d['total'])}]}
+                    number_invoice(c,invoice)
+                    prepared.append((d,item.customer_id,invoice))
+                else:
+                    d['lead_time']=lead_time_for(d['lines'])
+                    event(d,'submitted' if item.submit else 'draft_created',actor)
+                    prepared.append((d,item.customer_id,None))
             result=[]
             for entry in prepared:
                 if isinstance(entry,tuple):
-                    d,cid=entry
+                    d,cid,invoice=entry
                     put(c,'project',d,cid)
+                    if invoice:
+                        put(c,'invoice',invoice,cid)
                     result.append(enrich(c,d))
                 else:
                     result.append(entry)

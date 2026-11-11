@@ -9,7 +9,7 @@ const tx = (zh: string, en: string) => locale.value === 'zh' ? zh : en;
 type Customer = { customer_id: number; company: string; customer_code?: string; contact_name?: string; email?: string };
 type Product = { id: number; source_code: string; name_en?: string; name_zh?: string; material?: string; orderable?: boolean };
 type EntryLine = { window_name: string; product_id: number | ''; width_mm: string; height_mm: string; quantity: number; panel_count: number; options: string };
-type OrderDraft = { ref: string; customer_id: number | ''; project_name: string; site_address: string; installation_required: boolean; lines: EntryLine[]; submit: boolean };
+type OrderDraft = { ref: string; customer_id: number | ''; project_name: string; site_address: string; installation_required: boolean; lines: EntryLine[]; submit: boolean; historical_confirmed_deposit_date?: string };
 type Preview = { customer_id: number; project_name: string; subtotal: string; installation?: string; tax: string; total: string; deposit: string; currency?: string; line_count: number };
 const customers = ref<Customer[]>([]);
 const products = ref<Product[]>([]);
@@ -22,7 +22,8 @@ const previews = ref<Preview[]>([]);
 const readyOrders = ref<OrderDraft[]>([]);
 const preparedPayloads = ref<any[]>([]);
 const draft = reactive<OrderDraft>({ ref: 'single', customer_id: '', project_name: '', site_address: '', installation_required: false, lines: [], submit: false });
-const bulkHeaders = ['Order Ref','Customer Code','Project Name','Site Address','Installation Required','Window Name','Series','Width (mm)','Height (mm)','Quantity','Panels','Options JSON'];
+const bulkHeaders = ['Order Ref','Customer Code','Project Name','Site Address','Installation Required','Window Name','Series','Width (mm)','Height (mm)','Quantity','Panels','Options JSON','Quote Date (YYYY-MM-DD)'];
+const historicalImport = ref(false);
 const headerText = computed(() => bulkHeaders.join('\t'));
 watch(draft, () => clearPreview(), { deep: true });
 const productLabel = (p: Product) => `${p.name_en || p.source_code}${p.material ? ` · ${p.material}` : ''}`;
@@ -43,7 +44,7 @@ function orderPayload(order: OrderDraft) {
   if (!order.lines.length) throw new Error(tx('订单至少需要一行产品。','Each order needs at least one product line.'));
   const lines = order.lines.map(linePayload);
   if (lines.some(line => !line.window_name || !line.product_id || !(line.width_mm > 0) || !(line.height_mm > 0) || !(line.quantity > 0) || !(line.panel_count > 0))) throw new Error(tx('请完整填写每行的窗位、系列、尺寸、数量和扇数。','Complete the window, series, dimensions, quantity and panel count on every line.'));
-  return { customer_id: Number(order.customer_id), project_name: order.project_name.trim(), site_address: order.site_address.trim(), installation_required: order.installation_required, lines, submit: order.submit, submission_key: crypto.randomUUID() };
+  return { customer_id: Number(order.customer_id), project_name: order.project_name.trim(), site_address: order.site_address.trim(), installation_required: order.installation_required, lines, submit: order.submit, ...(order.historical_confirmed_deposit_date ? { historical_confirmed_deposit_date: order.historical_confirmed_deposit_date } : {}), submission_key: crypto.randomUUID() };
 }
 function parseBulk(): OrderDraft[] {
   const rows = pasted.value.trim().split(/\r?\n/).filter(Boolean).map(row => row.split('\t'));
@@ -72,6 +73,10 @@ function parseBulk(): OrderDraft[] {
     if (order.customer_id !== customer.customer_id || order.project_name !== project || order.site_address !== address || order.installation_required !== install) throw new Error(tx(`第 ${rowNo} 行与订单编号“${ref}”已有行的客户或项目信息不一致。`,`Row ${rowNo} has different customer or project details from the other rows for order “${ref}”.`));
     let options: unknown;
     try { options = JSON.parse(cell('options json') || '{}'); } catch { throw new Error(tx(`第 ${rowNo} 行 Options JSON 无效。`,`Row ${rowNo} has invalid Options JSON.`)); }
+    const quoteDate = historicalImport.value ? cell('quote date (yyyy-mm-dd)') : '';
+    if (historicalImport.value && !/^\d{4}-\d{2}-\d{2}$/.test(quoteDate)) throw new Error(tx(`第 ${rowNo} 行需要填写报价日期（YYYY-MM-DD）。`,`Row ${rowNo} needs a quote date in YYYY-MM-DD format.`));
+    if (historicalImport.value && order.historical_confirmed_deposit_date && order.historical_confirmed_deposit_date !== quoteDate) throw new Error(tx(`订单“${ref}”的多行报价日期不一致。`,`Quote dates differ across rows for order “${ref}”.`));
+    if (historicalImport.value) order.historical_confirmed_deposit_date = quoteDate;
     order.lines.push({ window_name: cell('window name'), product_id: product.id, width_mm: cell('width (mm)'), height_mm: cell('height (mm)'), quantity: Number(cell('quantity') || 1), panel_count: Number(cell('panels') || 1), options: JSON.stringify(options) });
   });
   return [...groups.values()].map(order => ({ ...order, submit: false }));
@@ -123,6 +128,7 @@ onMounted(async () => {
     </template>
     <template v-else>
       <div class="entry-template"><strong>{{ tx('固定列顺序（第一行为表头）','Required column order (first row is the header)') }}</strong><code>{{ headerText }}</code><button class="entry-secondary" type="button" @click="copyHeader">{{ tx('复制表头','Copy header') }}</button><p>{{ tx('每个订单可占多行产品；Order Ref 相同的行会合并为一个订单。Customer Code 使用系统客户代码。Options JSON 可留空 {}。不需要粘贴价格。','Use multiple product rows per order. Rows with the same Order Ref become one order. Customer Code must match the system. Options JSON can be {}. Do not include prices.') }}</p></div>
+      <label class="entry-submit"><input v-model="historicalImport" type="checkbox" @change="clearPreview()" />{{ tx('历史订单导入：把报价日期记作创建、确认和定金到账日期（会计入订单、现金流及返利统计）','Historical import: use quote date as creation, acceptance and deposit receipt date (affects order, cash flow and rebate reporting)') }}</label>
       <textarea v-model="pasted" class="entry-paste" spellcheck="false" :placeholder="headerText" @input="clearPreview()"></textarea>
     </template>
     <div class="entry-actions"><button type="button" :disabled="busy || !customers.length || !products.length" @click="preview">{{ busy ? tx('处理中…','Working…') : tx('预览匹配与系统价格','Preview matches and system prices') }}</button><button v-if="previews.length" type="button" :disabled="busy" @click="createOrders">{{ tx(`确认创建 ${previews.length} 个订单`,`Create ${previews.length} order(s)`) }}</button></div>
