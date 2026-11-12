@@ -368,12 +368,12 @@ function arrangeSignatureSideBySide() {
   const body = document.createElement("tbody");
   const row = document.createElement("tr");
   const brandCell = document.createElement("td");
-  brandCell.style.width = "38%";
+  brandCell.style.width = "32%";
   brandCell.style.paddingRight = "18px";
   brandCell.style.verticalAlign = "middle";
   brandCell.style.textAlign = "center";
   const detailsCell = document.createElement("td");
-  detailsCell.style.width = "62%";
+  detailsCell.style.width = "68%";
   detailsCell.style.paddingLeft = "18px";
   detailsCell.style.verticalAlign = "middle";
 
@@ -704,9 +704,9 @@ onMounted(() => void loadStatus());
 .compose-card>header h2{margin:0;color:#304451;font-size:20px}.compose-card>header button{display:grid;place-items:center;width:36px;height:36px;border:1px solid #d6e0e5;border-radius:50%;background:#fff;color:#405969;cursor:pointer}
 .compose-card>label{display:grid;gap:5px;color:#425966;font-size:12px;font-weight:650}.compose-card textarea{resize:vertical;line-height:1.5}
 .compose-card footer{position:sticky;bottom:-19px;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px -19px -19px;padding:12px 19px;border-top:1px solid #e5ebee;background:#fff}.compose-card footer span{color:#687b86;font-size:11px}
-.mail-settings-card{width:min(1020px,96vw);gap:13px}.template-editor,.signature-editor,.signature-logo-editor{gap:10px;padding:13px;border:1px solid #d8e2e7;border-radius:9px;background:#f8fafb}.mail-settings-card h3{margin:0;font-size:15px;color:#344956}.signature-logo-editor{display:grid}.signature-logo-editor>p{margin:0;color:#647782;font-size:12px;line-height:1.5}.signature-logo-actions{display:flex;gap:8px;flex-wrap:wrap}.signature-logo-editor>.mail-help{margin:0}
+.mail-settings-card{width:min(1280px,98vw);gap:13px}.template-editor,.signature-editor,.signature-logo-editor{gap:10px;padding:13px;border:1px solid #d8e2e7;border-radius:9px;background:#f8fafb}.mail-settings-card h3{margin:0;font-size:15px;color:#344956}.signature-logo-editor{display:grid}.signature-logo-editor>p{margin:0;color:#647782;font-size:12px;line-height:1.5}.signature-logo-actions{display:flex;gap:8px;flex-wrap:wrap}.signature-logo-editor>.mail-help{margin:0}
 .signature-editor-help{margin:0;color:#647782;font-size:12px;line-height:1.5}
-.signature-design-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(240px,.8fr);gap:12px;align-items:stretch}
+.signature-design-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;align-items:stretch}
 .signature-editor-workspace,.signature-preview-panel{min-width:0;border:1px solid #d7e1e6;border-radius:8px;background:#fff;overflow:hidden}
 .signature-toolbar{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:7px;border-bottom:1px solid #dfe7eb;background:#f3f6f7}
 .signature-toolbar select{width:auto;min-width:72px;height:32px;min-height:32px!important;padding:3px 6px;border:1px solid #cfdae0;border-radius:5px;background:#fff;color:#40515c;font:inherit;font-size:11px}
@@ -728,7 +728,7 @@ onMounted(() => void loadStatus());
 .signature-design-canvas p{margin:0 0 7px}.signature-design-canvas p:last-child{margin-bottom:0}
 .signature-preview-panel{padding:12px;background:#f3f6f7}
 .signature-preview-panel h4{margin:0 0 9px;color:#60727d;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
-.signature-preview-canvas{min-height:162px;padding:13px;border:1px solid #e0e7eb;border-radius:5px;background:#fff;color:#344956;font:13px/1.55 Arial,sans-serif;overflow-wrap:anywhere}
+.signature-preview-canvas{min-height:120px;padding:13px;border:1px solid #e0e7eb;border-radius:5px;background:#fff;color:#344956;font:13px/1.55 Arial,sans-serif;overflow-wrap:anywhere}
 .signature-preview-canvas :deep(p){margin:0 0 7px}.signature-preview-canvas :deep(p:last-child){margin-bottom:0}
 .signature-preview-canvas :deep(img){max-width:100%;height:auto;vertical-align:middle}
 .signature-preview-canvas :deep(table){max-width:100%;border-collapse:collapse}
