@@ -1052,6 +1052,7 @@ class InvoiceDesignBlock(Input):
     enabled: bool = True
     align: Literal['left', 'center', 'right'] = 'left'
     width: int = Field(default=220, ge=80, le=560)
+    area: Literal['top_left', 'top_right', 'middle_left', 'middle_right', 'items', 'bottom_left', 'bottom_right', 'footer'] = 'middle_left'
 
 
 class InvoiceDesign(Input):

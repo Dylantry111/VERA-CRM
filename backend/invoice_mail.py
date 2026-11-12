@@ -152,9 +152,18 @@ _LAYOUT_LABELS = {
     'payment': 'Payment details', 'notes': 'Invoice note', 'footer': 'Footer message',
 }
 
+_LAYOUT_AREAS = ('top_left', 'top_right', 'middle_left', 'middle_right', 'items', 'bottom_left', 'bottom_right', 'footer')
+_DEFAULT_AREAS = {
+    'logo': 'top_left', 'heading': 'top_right',
+    'company': 'middle_left', 'bill_to': 'middle_right',
+    'order_lines': 'items', 'payment': 'bottom_left', 'notes': 'bottom_left',
+    'totals': 'bottom_right', 'footer': 'footer',
+}
+_DEFAULT_ALIGNMENTS = {'heading': 'right', 'totals': 'right'}
+
 
 def default_invoice_design():
-    return {'blocks': [{'id': block, 'enabled': True, 'align': 'left', 'width': 220} for block in _LAYOUT_BLOCKS]}
+    return {'blocks': [{'id': block, 'enabled': True, 'align': _DEFAULT_ALIGNMENTS.get(block, 'left'), 'width': 220, 'area': _DEFAULT_AREAS[block]} for block in _LAYOUT_BLOCKS]}
 
 
 def invoice_design(template, kind):
@@ -169,8 +178,9 @@ def invoice_design(template, kind):
             'id': block_id,
             'label': _LAYOUT_LABELS[block_id],
             'enabled': block.get('enabled', True) if block_id not in ('order_lines', 'totals') else True,
-            'align': block.get('align') if block.get('align') in ('left', 'center', 'right') else 'left',
+            'align': (block.get('align') if block.get('area') in _LAYOUT_AREAS else _DEFAULT_ALIGNMENTS.get(block_id, 'left')) if block.get('align') in ('left', 'center', 'right') else _DEFAULT_ALIGNMENTS.get(block_id, 'left'),
             'width': max(80, min(560, int(block.get('width') or 220))),
+            'area': block.get('area') if block.get('area') in _LAYOUT_AREAS else _DEFAULT_AREAS[block_id],
         })
     # Preserve the chosen order, append any blocks added by a newer version.
     ordered = [dict(by_id[b.get('id')], id=b['id']) for b in source if b.get('id') in _LAYOUT_BLOCKS]
@@ -178,7 +188,12 @@ def invoice_design(template, kind):
     ordered += [b for b in blocks if b['id'] not in seen]
     for block in ordered:
         base = next(b for b in blocks if b['id'] == block['id'])
-        block.update({k: base[k] for k in ('label', 'enabled', 'align', 'width') if k not in block})
+        if block.get('area') not in _LAYOUT_AREAS:
+            block['area'] = base['area']
+            block['align'] = base['align']
+        block.update({k: base[k] for k in ('label', 'enabled', 'width') if k not in block})
+        if block.get('align') not in ('left', 'center', 'right'):
+            block['align'] = base['align']
         if block['id'] in ('order_lines', 'totals'):
             block['enabled'] = True
     return {'blocks': ordered}
@@ -312,38 +327,56 @@ def _html(m, a4=False):
     design = (m.get('design') or {}).get('blocks') or invoice_design({}, 'deposit')['blocks']
     payment = '<div style="padding:12px;border:1px solid ' + line + ';border-radius:7px"><b>PAYMENT DETAILS</b>' + ''.join(f'<div>{e(label)}: <strong>{e(value)}</strong></div>' for label, value in m['payment']) + '</div>' if m['payment'] else ''
     sections = []
+    area_sections = {area: [] for area in _LAYOUT_AREAS}
     for block in design:
         bid, align = block['id'], block.get('align', 'left')
+        area = block.get('area') if block.get('area') in area_sections else _DEFAULT_AREAS[bid]
         if not block.get('enabled', True):
             continue
         if bid == 'logo' and m.get('logo'):
             width = int(block.get('width', 220))
-            sections.append(f'<div style="text-align:{align};margin-bottom:12px"><img src="{m["logo"]}" alt="{e(m["brand"])}" style="width:{width}px;max-width:100%;height:auto;max-height:150px"></div>')
+            value = f'<div style="text-align:{align};margin-bottom:12px"><img src="{m["logo"]}" alt="{e(m["brand"])}" style="width:{width}px;max-width:100%;height:auto;max-height:150px"></div>'
+            sections.append(value); area_sections[area].append(value)
         elif bid == 'company':
             value = f'<b style="font-size:15px">{e(m["brand"])}</b>' + (f'<div>GST No. {e(m["brand_gst"])}</div>' if m['brand_gst'] else '') + (f'<div>{e(m["brand_address"])}</div>' if m['brand_address'] else '')
-            sections.append(f'<div style="text-align:{align};font-size:12px;line-height:1.55;color:#52636d;margin-bottom:12px">{value}</div>')
+            value = f'<div style="text-align:{align};font-size:12px;line-height:1.55;color:#52636d;margin-bottom:12px">{value}</div>'
+            sections.append(value); area_sections[area].append(value)
         elif bid == 'heading':
             reference = f'<div>Reference: {e(m["reference"])}</div>' if m['reference'] else ''
-            sections.append(f'<div style="text-align:{align};padding:10px 0;border-bottom:1px solid {line};margin-bottom:14px"><strong style="font-size:23px;color:{accent}">{e(m["kind"])}</strong><div>{e(m["number"])}</div>{reference}<small>Invoice date: {e(m["date"])} · Due: {e(m["due_date"])}</small></div>')
+            value = f'<div style="text-align:{align};padding:10px 0;border-bottom:1px solid {line};margin-bottom:14px"><strong style="font-size:23px;color:{accent}">{e(m["kind"])}</strong><div>{e(m["number"])}</div>{reference}<small>Invoice date: {e(m["date"])} · Due: {e(m["due_date"])}</small></div>'
+            sections.append(value); area_sections[area].append(value)
         elif bid == 'bill_to':
             value = f'<small>BILL TO</small><br><strong>{e(m["company"])}</strong>' + ('<br>' + e(m['contact']) if m['contact'] else '') + ('<br>' + e(m['address']) if m['address'] else '')
-            sections.append(f'<div style="text-align:{align};padding:12px;background:#f5f7f8;border-radius:7px;margin-bottom:14px">{value}</div>')
+            value = f'<div style="text-align:{align};padding:12px;background:#f5f7f8;border-radius:7px;margin-bottom:14px">{value}</div>'
+            sections.append(value); area_sections[area].append(value)
         elif bid == 'order_lines':
-            sections.append(f'<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px"><tr><td style="border-bottom:2px solid {ink};padding:8px 0">ORDER / DESCRIPTION</td>{headings}</tr>{rows}{rebate_rows}</table>')
+            value = f'<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px"><tr><td style="border-bottom:2px solid {ink};padding:8px 0">ORDER / DESCRIPTION</td>{headings}</tr>{rows}{rebate_rows}</table>'
+            sections.append(value); area_sections[area].append(value)
         elif bid == 'totals':
-            sections.append(f'<div style="text-align:{align};padding:12px;background:#edf2f4;border-radius:7px;margin-bottom:14px"><div>Includes GST ({e(m["gst_rate"])}): {e(m["currency"])} {e(m["gst"])}</div><strong style="font-size:21px;color:{accent}">Total due (incl. GST): {e(m["currency"])} {e(m["due"])}</strong></div>')
+            value = f'<div style="text-align:{align};padding:12px;background:#edf2f4;border-radius:7px;margin-bottom:14px"><div>Includes GST ({e(m["gst_rate"])}): {e(m["currency"])} {e(m["gst"])}</div><strong style="font-size:21px;color:{accent}">Total due (incl. GST): {e(m["currency"])} {e(m["due"])}</strong></div>'
+            sections.append(value); area_sections[area].append(value)
         elif bid == 'payment' and payment:
-            sections.append(f'<div style="text-align:{align};margin-bottom:14px">{payment}</div>')
+            value = f'<div style="text-align:{align};margin-bottom:14px">{payment}</div>'
+            sections.append(value); area_sections[area].append(value)
         elif bid == 'notes':
-            sections.append(f'<div style="text-align:{align};font-size:12px;color:#52636d;margin-bottom:14px">{e(m["basis"])}</div>')
+            value = f'<div style="text-align:{align};font-size:12px;color:#52636d;margin-bottom:14px">{e(m["basis"])}</div>'
+            sections.append(value); area_sections[area].append(value)
         elif bid == 'footer':
-            sections.append(f'<div style="text-align:{align};border-top:1px solid {line};padding-top:12px;font-size:12px;color:#52636d">{e(m["footer"])}<br><small>The PDF invoice is attached to this email.</small></div>')
+            value = f'<div style="text-align:{align};border-top:1px solid {line};padding-top:12px;font-size:12px;color:#52636d">{e(m["footer"])}<br><small>The PDF invoice is attached to this email.</small></div>'
+            sections.append(value); area_sections[area].append(value)
     content = ''.join(sections)
     if a4:
+        area_names = {'top_left': 'top-left', 'top_right': 'top-right', 'middle_left': 'middle-left', 'middle_right': 'middle-right', 'items': 'items', 'bottom_left': 'bottom-left', 'bottom_right': 'bottom-right', 'footer': 'footer'}
+        grid = ''.join(f'<section class="invoice-area {area_names[area]}">{"".join(area_sections[area])}</section>' for area in _LAYOUT_AREAS)
         return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=794,initial-scale=1"><style>
 *{{box-sizing:border-box}}html,body{{margin:0;width:794px;height:1123px;overflow:hidden!important;background:#fff;font-family:Arial,Helvetica,sans-serif;color:{ink}}}
 @page{{size:A4;margin:0}}#paper{{width:794px;height:1123px;padding:42px 46px;overflow:hidden;background:#fff}}
-</style></head><body><main id="paper">{content}</main></body></html>'''
+.invoice-grid{{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"top-left top-right" "middle-left middle-right" "items items" "bottom-left bottom-right" "footer footer";column-gap:24px;row-gap:10px;align-content:start}}
+.invoice-area.top-left{{grid-area:top-left}}.invoice-area.top-right{{grid-area:top-right}}.invoice-area.middle-left{{grid-area:middle-left}}.invoice-area.middle-right{{grid-area:middle-right}}.invoice-area.items{{grid-area:items}}.invoice-area.bottom-left{{grid-area:bottom-left}}.invoice-area.bottom-right{{grid-area:bottom-right}}.invoice-area.footer{{grid-area:footer}}
+.invoice-area{{min-width:0}}.invoice-area table{{table-layout:fixed}}.invoice-area img{{height:auto}}
+.invoice-area.bottom-right{{text-align:right}}.invoice-area.bottom-right>div{{display:inline-block;text-align:right}}
+.invoice-area.footer{{margin-top:8px}}
+</style></head><body><main id="paper"><div class="invoice-grid">{grid}</div></main></body></html>'''
     return f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:20px 10px;background:#f1f4f5;font-family:Arial,sans-serif;color:{ink}"><table width="100%"><tr><td align="center"><table width="680" style="max-width:680px;width:100%;background:#fff;border:1px solid {line};border-radius:10px"><tr><td style="padding:26px 30px">{content}</td></tr></table></td></tr></table></body></html>'
 
 
@@ -464,38 +497,36 @@ def render_pdf(m):
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm, bottomMargin=18 * mm, title=f"{m['kind']} {m['number']}", author=BRAND)
     width = A4[0] - 36 * mm
     design = (m.get('design') or {}).get('blocks') or invoice_design({}, 'deposit')['blocks']
-    story = []
+    block_content = {block['id']: [] for block in design}
     for block in design:
         bid, align = block['id'], block.get('align', 'left')
+        out = block_content[bid]
         if not block.get('enabled', True):
             continue
         if bid == 'logo' and m.get('logo'):
-            image = Image(io.BytesIO(base64.b64decode(m['logo'].split(',', 1)[1])), width=min(width, int(block.get('width', 220)) / 3.78 * mm), height=28 * mm, kind='proportional')
+            image = Image(io.BytesIO(base64.b64decode(m['logo'].split(',', 1)[1])), width=min(width / 2 - 8 * mm, int(block.get('width', 220)) / 3.78 * mm), height=28 * mm, kind='proportional')
             image.hAlign = {'left': 'LEFT', 'center': 'CENTER', 'right': 'RIGHT'}[align]
-            story += [image, Spacer(1, 3 * mm)]
+            out += [image, Spacer(1, 3 * mm)]
         elif bid == 'company':
             details = [para(m['brand'], 12, True, '#405969', align)]
             if m['brand_gst']:
                 details.append(para('GST No. ' + m['brand_gst'], 8, color='#64766b', align=align))
             if m['brand_address']:
                 details.append(para(m['brand_address'], 8, color='#64766b', align=align))
-            story += details + [Spacer(1, 3 * mm)]
+            out += details + [Spacer(1, 3 * mm)]
         elif bid == 'heading':
-            story += [para(m['kind'], 21, True, '#405969', align), para(m['number'], 10, align=align)]
+            out += [para(m['kind'], 21, True, '#405969', align), para(m['number'], 10, align=align)]
             if m['reference']:
-                story.append(para('Reference: ' + m['reference'], 9, align=align))
-            story += [para(f"Invoice date: {m['date']}    Due date: {m['due_date']}", 8, color='#64766b', align=align), Spacer(1, 4 * mm)]
+                out.append(para('Reference: ' + m['reference'], 9, align=align))
+            out += [para(f"Invoice date: {m['date']}    Due date: {m['due_date']}", 8, color='#64766b', align=align), Spacer(1, 4 * mm)]
         elif bid == 'bill_to':
-            rows = [[para('BILL TO', 8, color='#64766b'), para('INVOICE DATE', 8, color='#64766b', align='right'), para('DUE DATE', 8, color='#64766b', align='right')],
-                    [para(m['company'], 10, True), para(m['date'], 9, True, align='right'), para(m['due_date'], 9, True, align='right')]]
-            table = Table(rows, colWidths=[width * .6, width * .2, width * .2])
-            table.setStyle(TableStyle([('VALIGN', (0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
-            story.append(table)
+            out.append(para('BILL TO', 8, True, '#64766b'))
+            out.append(para(m['company'], 11, True))
             if m['contact']:
-                story.append(para(m['contact'], 8, color='#64766b'))
+                out.append(para(m['contact'], 8, color='#64766b'))
             if m['address']:
-                story.append(para(m['address'], 8, color='#64766b'))
-            story.append(Spacer(1, 5 * mm))
+                out.append(para(m['address'], 8, color='#64766b'))
+            out.append(Spacer(1, 5 * mm))
         elif bid == 'order_lines':
             labels = _columns(m)
             amount_w = 27 * mm
@@ -506,23 +537,46 @@ def render_pdf(m):
                 data.append([para(row['order'], 9), para(project, 9)] + [para(f"{m['currency']} {value}" if value else '', 9, align='right') for value in _cells(m, row)])
             table = Table(data, colWidths=widths, repeatRows=1)
             table.setStyle(TableStyle([('LINEBELOW',(0,0),(-1,0),1,ink),('LINEBELOW',(0,1),(-1,-1),.4,colors.HexColor('#dce4e8')),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
-            story += [table, Spacer(1, 4 * mm)]
+            out += [table, Spacer(1, 4 * mm)]
         elif bid == 'totals':
             totals = []
             if m['rebate']:
                 totals.append([para('Subtotal incl. GST', 9), para(f"{m['currency']} {m['gross']}", 9, align='right')])
                 totals += [[para(item['label'], 9), para(f"−{m['currency']} {item['amount']}", 9, align='right')] for item in m['rebate_items']] if m['rebate_items'] else [[para('Rebate applied', 9), para(f"−{m['currency']} {m['rebate']}", 9, align='right')]]
             totals += [[para(f"Includes GST ({m['gst_rate']})", 8, color='#64766b'), para(f"{m['currency']} {m['gst']}", 8, color='#64766b', align='right')], [para('Total due (incl. GST)', 11, True, '#405969'), para(f"{m['currency']} {m['due']}", 14, True, '#405969', 'right')]]
-            table = Table(totals, colWidths=[width * .65, width * .35])
+            table = Table(totals, colWidths=[(width / 2) * .65, (width / 2) * .35])
             table.setStyle(TableStyle([('LINEABOVE',(0,-2),(-1,-2),1,accent),('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
-            story += [table, Spacer(1, 4 * mm)]
+            out += [table, Spacer(1, 4 * mm)]
         elif bid == 'payment' and m['payment']:
-            story.append(para('PAYMENT DETAILS', 8, True, '#64766b', align))
-            story += [para(f'{label}: {value}', 9, align=align) for label, value in m['payment']]
-            story.append(Spacer(1, 4 * mm))
+            out.append(para('PAYMENT DETAILS', 8, True, '#64766b', align))
+            out += [para(f'{label}: {value}', 9, align=align) for label, value in m['payment']]
+            out.append(Spacer(1, 4 * mm))
         elif bid == 'notes':
-            story += [para(m['basis'], 8, color='#64766b', align=align), Spacer(1, 3 * mm)]
+            out += [para(m['basis'], 8, color='#64766b', align=align), Spacer(1, 3 * mm)]
         elif bid == 'footer':
-            story.append(para(m['footer'], 9, color='#52636d', align=align))
+            out.append(para(m['footer'], 9, color='#52636d', align=align))
+    story = []
+    def area_content(area):
+        result = []
+        for block in design:
+            block_area = block.get('area') if block.get('area') in _LAYOUT_AREAS else _DEFAULT_AREAS[block['id']]
+            if block_area == area:
+                result.extend(block_content[block['id']])
+        return result
+    def add_full(area):
+        values = area_content(area)
+        if values:
+            story.extend(values + [Spacer(1, 5 * mm)])
+    def add_pair(left_area, right_area):
+        left, right = area_content(left_area), area_content(right_area)
+        if left or right:
+            table = Table([[left or [''], right or ['']]], colWidths=[width / 2, width / 2])
+            table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),5 * mm),('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0)]))
+            story.extend([table, Spacer(1, 5 * mm)])
+    add_pair('top_left', 'top_right')
+    add_pair('middle_left', 'middle_right')
+    add_full('items')
+    add_pair('bottom_left', 'bottom_right')
+    add_full('footer')
     doc.build(story)
     return buffer.getvalue()
