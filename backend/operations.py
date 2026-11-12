@@ -1047,6 +1047,17 @@ class PaymentDetails(Input):
     reference_note: str = Field(default='', max_length=500)
 
 
+class InvoiceDesignBlock(Input):
+    id: Literal['logo', 'company', 'heading', 'bill_to', 'order_lines', 'totals', 'payment', 'notes', 'footer']
+    enabled: bool = True
+    align: Literal['left', 'center', 'right'] = 'left'
+    width: int = Field(default=220, ge=80, le=560)
+
+
+class InvoiceDesign(Input):
+    blocks: list[InvoiceDesignBlock] = Field(default_factory=list, max_length=9)
+
+
 class InvoiceTemplate(Input):
     company_name: str = Field(default='VERA Shading Solutions', max_length=200)
     gst_number: str = Field(default='', max_length=80)
@@ -1054,11 +1065,32 @@ class InvoiceTemplate(Input):
     footer: str = Field(default='', max_length=1000)
     deposit_note: str = Field(default='Deposit of 60% of the order total. Amounts include GST.', max_length=500)
     balance_note: str = Field(default='Balance of each order after the deposit already paid. Amounts include GST.', max_length=500)
+    invoice_designs: dict[Literal['deposit', 'balance', 'manual'], InvoiceDesign] = Field(default_factory=dict)
+
+    @field_validator('invoice_designs')
+    @classmethod
+    def validate_invoice_designs(cls, designs):
+        allowed = {'logo', 'company', 'heading', 'bill_to', 'order_lines', 'totals', 'payment', 'notes', 'footer'}
+        for design in designs.values():
+            ids = [block.id for block in design.blocks]
+            if len(ids) != len(set(ids)) or set(ids) != allowed:
+                raise ValueError('Each invoice design must include every layout block exactly once')
+            if not next(block for block in design.blocks if block.id == 'totals').enabled:
+                raise ValueError('The totals block must remain visible')
+            if not next(block for block in design.blocks if block.id == 'order_lines').enabled:
+                raise ValueError('The invoice items block must remain visible')
+        return designs
 
 
 class SettingsEdit(Input):
     payment_details: PaymentDetails
     invoice_template: InvoiceTemplate | None = None
+
+
+class InvoiceTemplatePreview(Input):
+    kind: Literal['deposit', 'balance', 'manual'] = 'deposit'
+    payment_details: PaymentDetails = Field(default_factory=PaymentDetails)
+    invoice_template: InvoiceTemplate = Field(default_factory=InvoiceTemplate)
 
 
 class MailboxConnect(Input):
@@ -1323,11 +1355,12 @@ def register(app, s):
         inv = get(c, iid, 'invoice')
         orders = {oid: get(c, oid, 'project') for oid in inv['order_ids']}
         email_invoice = dict(inv)
+        email_invoice.setdefault('template', invoice_template(c))
         email_invoice['rebate_allocations'] = [
             {**allocation, 'month': (get(c, allocation['rebate_id'], 'rebate').get('month') if allocation.get('rebate_id') else allocation.get('month'))}
             for allocation in inv.get('rebate_allocations', [])
         ]
-        return invoice_mail.build(email_invoice, profile(c, inv['customer_id']), orders, inv.get('payment_details') or payment_details(c))
+        return invoice_mail.build(email_invoice, profile(c, inv['customer_id']), orders, inv.get('payment_details') or payment_view(payment_details(c)))
 
     def put(c, kind, d, cid=None):
         c.execute('INSERT INTO operations_records(id,kind,customer_id,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
@@ -2269,6 +2302,11 @@ def register(app, s):
                 template = {**body.invoice_template.model_dump(), 'id': 'invoice-template', 'updated_at': s.now(), 'updated_by': actor}
                 put(c, 'setting', template)
             return {'payment_details': payment_view(saved), 'invoice_template': invoice_template(c)}
+
+    @app.post('/api/operations/invoice-template-preview')
+    def invoice_template_preview(body: InvoiceTemplatePreview, actor=Depends(s.require_admin)):
+        model = invoice_mail.sample_preview(body.invoice_template.model_dump(), body.payment_details.model_dump(), body.kind)
+        return {'html': model['html']}
 
     def mailbox_cipher():
         from cryptography.fernet import Fernet
@@ -3814,6 +3852,7 @@ def register(app, s):
                  'currency': 'NZD', 'tax_basis': 'GST included in total', 'tax_rate': tax_rate_now(c),
                  'gross': money(total), 'amount': money(total), 'status': 'draft', 'created_at': s.now(),
                  'due_date': body.due_date.isoformat() if body.due_date else None, 'actor': actor,
+                 'template': invoice_template(c), 'payment_details': payment_view(payment_details(c)),
                  'request_hash': bodyhash(body)}
             number_invoice(c, d)
             put(c, 'invoice', d, body.customer_id)

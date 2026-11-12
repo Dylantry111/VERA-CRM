@@ -72,6 +72,7 @@ def build(invoice, customer, orders, payment=None):
     deposit = kind == 'deposit'
     manual = kind == 'manual'
     template = invoice.get('template') or {}
+    kind_key = kind if kind in ('deposit', 'balance') else 'manual'
     currency = invoice.get('currency', 'NZD')
     rows = []
     for line in invoice.get('lines', []):
@@ -136,11 +137,68 @@ def build(invoice, customer, orders, payment=None):
                   else template.get('balance_note') or 'Balance of each order after the deposit already paid. Amounts include GST.'),
         'payment': bank,
         'footer': template.get('footer') or (f'Please pay by bank transfer to the account above and quote {reference or number} as the reference.' if bank else footer()),
+        'design': invoice_design(template, kind_key),
     }
     model['subject'] = f"VERA invoice {number}"
     model['text'] = _text(model)
     model['html'] = _html(model)
     return model
+
+
+_LAYOUT_BLOCKS = ('logo', 'company', 'heading', 'bill_to', 'order_lines', 'totals', 'payment', 'notes', 'footer')
+_LAYOUT_LABELS = {
+    'logo': 'Company logo', 'company': 'Company details', 'heading': 'Invoice title and dates',
+    'bill_to': 'Customer details', 'order_lines': 'Orders and items', 'totals': 'GST and total',
+    'payment': 'Payment details', 'notes': 'Invoice note', 'footer': 'Footer message',
+}
+
+
+def default_invoice_design():
+    return {'blocks': [{'id': block, 'enabled': True, 'align': 'left', 'width': 220} for block in _LAYOUT_BLOCKS]}
+
+
+def invoice_design(template, kind):
+    """Normalize stored layout while keeping old flat invoice settings fully compatible."""
+    saved = (template.get('invoice_designs') or {}).get(kind) or {}
+    source = saved.get('blocks') or []
+    by_id = {block.get('id'): block for block in source if block.get('id') in _LAYOUT_BLOCKS}
+    blocks = []
+    for block_id in _LAYOUT_BLOCKS:
+        block = by_id.get(block_id, {})
+        blocks.append({
+            'id': block_id,
+            'label': _LAYOUT_LABELS[block_id],
+            'enabled': block.get('enabled', True) if block_id not in ('order_lines', 'totals') else True,
+            'align': block.get('align') if block.get('align') in ('left', 'center', 'right') else 'left',
+            'width': max(80, min(560, int(block.get('width') or 220))),
+        })
+    # Preserve the chosen order, append any blocks added by a newer version.
+    ordered = [dict(by_id[b.get('id')], id=b['id']) for b in source if b.get('id') in _LAYOUT_BLOCKS]
+    seen = {b.get('id') for b in ordered}
+    ordered += [b for b in blocks if b['id'] not in seen]
+    for block in ordered:
+        base = next(b for b in blocks if b['id'] == block['id'])
+        block.update({k: base[k] for k in ('label', 'enabled', 'align', 'width') if k not in block})
+        if block['id'] in ('order_lines', 'totals'):
+            block['enabled'] = True
+    return {'blocks': ordered}
+
+
+def sample_preview(template, payment, kind):
+    """Render a realistic, deterministic invoice example for the visual template editor."""
+    customer = {'company': 'Auckland Shutters', 'contact_name': 'Jeremy', 'company_address': 'Auckland, New Zealand'}
+    invoice = {
+        'id': 'preview-invoice', 'fixed_number': 'INV-00042', 'kind': kind, 'customer_id': 1,
+        'created_at': '2026-11-12', 'due_date': '2026-11-26', 'currency': 'NZD',
+        'tax_rate': '0.15', 'deposit_rate': '0.60', 'tax_basis': 'GST inclusive',
+        'amount': '1201.06' if kind == 'deposit' else ('801.06' if kind == 'balance' else '460.00'),
+        'gross': '1201.06' if kind != 'manual' else '460.00', 'template': template,
+        'lines': ([{'order_id': 'preview-order', 'amount': '1201.06', 'description': 'AA-METCALFE'}] if kind == 'deposit'
+                  else [{'order_id': 'preview-order', 'amount': '801.06', 'description': 'AA-METCALFE'}] if kind == 'balance'
+                  else [{'description': 'Additional installation service', 'amount': '460.00'}]),
+    }
+    orders = {'preview-order': {'order_number': 'AA-METCALFE', 'project_name': 'Living room shutters', 'site_address': 'Auckland', 'total': '2001.77', 'tax_rate': '0.15'}}
+    return build(invoice, customer, orders, payment)
 
 
 def _columns(m):
@@ -187,7 +245,7 @@ def _text(m):
     return '\n'.join(lines)
 
 
-def _html(m):
+def _html_legacy(m):
     e = escape
     green, ink, line = '#0f6e5c', '#1b2421', '#e1e8e3'
     labels = _columns(m)
@@ -232,6 +290,54 @@ def _html(m):
 <td align="right" style="padding:16px 18px;font-size:26px;font-weight:700;color:{green};white-space:nowrap">{e(m["currency"])} {m["due"]}</td></tr></table></td></tr>
 {pay}<tr><td style="padding:0 32px 28px;font-size:13px;line-height:1.7;color:#4d6256">{e(m["footer"])}<br><span style="color:#64766b">The PDF invoice is attached to this email.</span></td></tr>
 </table></td></tr></table></body></html>'''
+
+
+def _html(m):
+    e = escape
+    accent, ink, line = '#405969', '#263640', '#dce4e8'
+    labels = _columns(m)
+    headings = ''.join(f'<td align="right" style="padding:8px 0 8px 12px;border-bottom:2px solid {ink};font-size:11px;color:#64766b">{e(label)}</td>' for label in labels)
+    rows = ''
+    for row in m['rows']:
+        values = ''.join(f'<td align="right" style="padding:10px 0 10px 12px;border-bottom:1px solid {line};white-space:nowrap">{e(m["currency"])} {value}</td>' if value else '<td></td>' for value in _cells(m, row))
+        name = row['order'] or row['project']
+        detail = f'<br><span style="font-size:12px;color:#64766b">{e(row["project"] + (" · " + row["site"] if row["site"] else ""))}</span>' if row['order'] else ''
+        rows += f'<tr><td style="padding:10px 0;border-bottom:1px solid {line}"><strong>{e(name)}</strong>{detail}</td>{values}</tr>'
+    rebate_rows = ''
+    if m['rebate']:
+        rebate_rows = f'<tr><td colspan="{len(labels)}">Subtotal</td><td align="right">{e(m["currency"])} {m["gross"]}</td></tr>'
+        rebate_rows += ''.join(f'<tr><td colspan="{len(labels)}">{e(item["label"])}</td><td align="right">−{e(m["currency"])} {item["amount"]}</td></tr>' for item in m['rebate_items']) if m['rebate_items'] else f'<tr><td colspan="{len(labels)}">Rebate applied</td><td align="right">−{e(m["currency"])} {m["rebate"]}</td></tr>'
+    design = (m.get('design') or {}).get('blocks') or invoice_design({}, 'deposit')['blocks']
+    payment = '<div style="padding:12px;border:1px solid ' + line + ';border-radius:7px"><b>PAYMENT DETAILS</b>' + ''.join(f'<div>{e(label)}: <strong>{e(value)}</strong></div>' for label, value in m['payment']) + '</div>' if m['payment'] else ''
+    sections = []
+    for block in design:
+        bid, align = block['id'], block.get('align', 'left')
+        if not block.get('enabled', True):
+            continue
+        if bid == 'logo' and m.get('logo'):
+            width = int(block.get('width', 220))
+            sections.append(f'<div style="text-align:{align};margin-bottom:12px"><img src="{m["logo"]}" alt="{e(m["brand"])}" style="width:{width}px;max-width:100%;height:auto;max-height:150px"></div>')
+        elif bid == 'company':
+            value = f'<b style="font-size:15px">{e(m["brand"])}</b>' + (f'<div>GST No. {e(m["brand_gst"])}</div>' if m['brand_gst'] else '') + (f'<div>{e(m["brand_address"])}</div>' if m['brand_address'] else '')
+            sections.append(f'<div style="text-align:{align};font-size:12px;line-height:1.55;color:#52636d;margin-bottom:12px">{value}</div>')
+        elif bid == 'heading':
+            reference = f'<div>Reference: {e(m["reference"])}</div>' if m['reference'] else ''
+            sections.append(f'<div style="text-align:{align};padding:10px 0;border-bottom:1px solid {line};margin-bottom:14px"><strong style="font-size:23px;color:{accent}">{e(m["kind"])}</strong><div>{e(m["number"])}</div>{reference}<small>Invoice date: {e(m["date"])} · Due: {e(m["due_date"])}</small></div>')
+        elif bid == 'bill_to':
+            value = f'<small>BILL TO</small><br><strong>{e(m["company"])}</strong>' + ('<br>' + e(m['contact']) if m['contact'] else '') + ('<br>' + e(m['address']) if m['address'] else '')
+            sections.append(f'<div style="text-align:{align};padding:12px;background:#f5f7f8;border-radius:7px;margin-bottom:14px">{value}</div>')
+        elif bid == 'order_lines':
+            sections.append(f'<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px"><tr><td style="border-bottom:2px solid {ink};padding:8px 0">ORDER / DESCRIPTION</td>{headings}</tr>{rows}{rebate_rows}</table>')
+        elif bid == 'totals':
+            sections.append(f'<div style="text-align:{align};padding:12px;background:#edf2f4;border-radius:7px;margin-bottom:14px"><div>Includes GST ({e(m["gst_rate"])}): {e(m["currency"])} {e(m["gst"])}</div><strong style="font-size:21px;color:{accent}">Total due (incl. GST): {e(m["currency"])} {e(m["due"])}</strong></div>')
+        elif bid == 'payment' and payment:
+            sections.append(f'<div style="text-align:{align};margin-bottom:14px">{payment}</div>')
+        elif bid == 'notes':
+            sections.append(f'<div style="text-align:{align};font-size:12px;color:#52636d;margin-bottom:14px">{e(m["basis"])}</div>')
+        elif bid == 'footer':
+            sections.append(f'<div style="text-align:{align};border-top:1px solid {line};padding-top:12px;font-size:12px;color:#52636d">{e(m["footer"])}<br><small>The PDF invoice is attached to this email.</small></div>')
+    content = ''.join(sections)
+    return f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:20px 10px;background:#f1f4f5;font-family:Arial,sans-serif;color:{ink}"><table width="100%"><tr><td align="center"><table width="680" style="max-width:680px;width:100%;background:#fff;border:1px solid {line};border-radius:10px"><tr><td style="padding:26px 30px">{content}</td></tr></table></td></tr></table></body></html>'
 
 
 def render_pdf(m):
@@ -321,3 +427,95 @@ def render_pdf(m):
     story += [Spacer(1, 8 * mm), P(m['footer'], base)]
     doc.build(story)
     return buf.getvalue()
+
+
+_render_pdf_legacy = render_pdf
+
+
+def render_pdf(m):
+    """A4 invoice PDF rendered from the same movable blocks as the HTML invoice."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    try:
+        pdfmetrics.getFont('STSong-Light')
+    except KeyError:
+        pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+
+    def para(value, size=9, bold=False, color='#263640', align='left'):
+        safe = _CJK.sub(lambda g: f'<font name="STSong-Light">{g.group(1)}</font>', escape(str(value or '')).replace('\n', '<br/>'))
+        return Paragraph(safe, ParagraphStyle(f'invoice_{size}_{bold}_{align}', fontName='Helvetica-Bold' if bold else 'Helvetica', fontSize=size, leading=size + 3, textColor=colors.HexColor(color), alignment={'left': 0, 'center': 1, 'right': 2}[align]))
+
+    accent = colors.HexColor('#405969')
+    ink = colors.HexColor('#263640')
+    muted = colors.HexColor('#64766b')
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm, bottomMargin=18 * mm, title=f"{m['kind']} {m['number']}", author=BRAND)
+    width = A4[0] - 36 * mm
+    design = (m.get('design') or {}).get('blocks') or invoice_design({}, 'deposit')['blocks']
+    story = []
+    for block in design:
+        bid, align = block['id'], block.get('align', 'left')
+        if not block.get('enabled', True):
+            continue
+        if bid == 'logo' and m.get('logo'):
+            image = Image(io.BytesIO(base64.b64decode(m['logo'].split(',', 1)[1])), width=min(width, int(block.get('width', 220)) / 3.78 * mm), height=28 * mm, kind='proportional')
+            image.hAlign = {'left': 'LEFT', 'center': 'CENTER', 'right': 'RIGHT'}[align]
+            story += [image, Spacer(1, 3 * mm)]
+        elif bid == 'company':
+            details = [para(m['brand'], 12, True, '#405969', align)]
+            if m['brand_gst']:
+                details.append(para('GST No. ' + m['brand_gst'], 8, color='#64766b', align=align))
+            if m['brand_address']:
+                details.append(para(m['brand_address'], 8, color='#64766b', align=align))
+            story += details + [Spacer(1, 3 * mm)]
+        elif bid == 'heading':
+            story += [para(m['kind'], 21, True, '#405969', align), para(m['number'], 10, align=align)]
+            if m['reference']:
+                story.append(para('Reference: ' + m['reference'], 9, align=align))
+            story += [para(f"Invoice date: {m['date']}    Due date: {m['due_date']}", 8, color='#64766b', align=align), Spacer(1, 4 * mm)]
+        elif bid == 'bill_to':
+            rows = [[para('BILL TO', 8, color='#64766b'), para('INVOICE DATE', 8, color='#64766b', align='right'), para('DUE DATE', 8, color='#64766b', align='right')],
+                    [para(m['company'], 10, True), para(m['date'], 9, True, align='right'), para(m['due_date'], 9, True, align='right')]]
+            table = Table(rows, colWidths=[width * .6, width * .2, width * .2])
+            table.setStyle(TableStyle([('VALIGN', (0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
+            story.append(table)
+            if m['contact']:
+                story.append(para(m['contact'], 8, color='#64766b'))
+            if m['address']:
+                story.append(para(m['address'], 8, color='#64766b'))
+            story.append(Spacer(1, 5 * mm))
+        elif bid == 'order_lines':
+            labels = _columns(m)
+            amount_w = 27 * mm
+            widths = [25 * mm, width - 25 * mm - amount_w * len(labels)] + [amount_w] * len(labels)
+            data = [[para('ORDER', 8, color='#64766b'), para('PROJECT / DESCRIPTION', 8, color='#64766b')] + [para(label.upper(), 8, color='#64766b', align='right') for label in labels]]
+            for row in m['rows']:
+                project = row['project'] + (f" - {row['site']}" if row['site'] else '')
+                data.append([para(row['order'], 9), para(project, 9)] + [para(f"{m['currency']} {value}" if value else '', 9, align='right') for value in _cells(m, row)])
+            table = Table(data, colWidths=widths, repeatRows=1)
+            table.setStyle(TableStyle([('LINEBELOW',(0,0),(-1,0),1,ink),('LINEBELOW',(0,1),(-1,-1),.4,colors.HexColor('#dce4e8')),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
+            story += [table, Spacer(1, 4 * mm)]
+        elif bid == 'totals':
+            totals = []
+            if m['rebate']:
+                totals.append([para('Subtotal incl. GST', 9), para(f"{m['currency']} {m['gross']}", 9, align='right')])
+                totals += [[para(item['label'], 9), para(f"−{m['currency']} {item['amount']}", 9, align='right')] for item in m['rebate_items']] if m['rebate_items'] else [[para('Rebate applied', 9), para(f"−{m['currency']} {m['rebate']}", 9, align='right')]]
+            totals += [[para(f"Includes GST ({m['gst_rate']})", 8, color='#64766b'), para(f"{m['currency']} {m['gst']}", 8, color='#64766b', align='right')], [para('Total due (incl. GST)', 11, True, '#405969'), para(f"{m['currency']} {m['due']}", 14, True, '#405969', 'right')]]
+            table = Table(totals, colWidths=[width * .65, width * .35])
+            table.setStyle(TableStyle([('LINEABOVE',(0,-2),(-1,-2),1,accent),('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
+            story += [table, Spacer(1, 4 * mm)]
+        elif bid == 'payment' and m['payment']:
+            story.append(para('PAYMENT DETAILS', 8, True, '#64766b', align))
+            story += [para(f'{label}: {value}', 9, align=align) for label, value in m['payment']]
+            story.append(Spacer(1, 4 * mm))
+        elif bid == 'notes':
+            story += [para(m['basis'], 8, color='#64766b', align=align), Spacer(1, 3 * mm)]
+        elif bid == 'footer':
+            story.append(para(m['footer'], 9, color='#52636d', align=align))
+    doc.build(story)
+    return buffer.getvalue()
