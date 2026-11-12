@@ -335,16 +335,43 @@ function updateSignatureDraft() {
   rememberSignatureSelection();
 }
 
-function readSignatureImage(event: Event) {
+async function readSignatureImage(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0];
   if (!file) return;
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 1024 * 1024) {
-    error.value = tx("请使用不超过 1 MB 的 PNG、JPEG 或 WebP 图片。", "Choose a PNG, JPEG or WebP image under 1 MB.");
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+    error.value = tx("请使用不超过 5 MB 的 PNG、JPEG 或 WebP 图片。", "Choose a PNG, JPEG or WebP image under 5 MB.");
     return;
   }
-  const reader = new FileReader();
-  reader.onload = () => { signatureImageDraft.value = String(reader.result || ""); };
-  reader.readAsDataURL(file);
+  error.value = "";
+  try {
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Image optimization is not available in this browser.");
+    let scale = Math.min(1, 1400 / bitmap.width, 900 / bitmap.height);
+    let quality = 0.9;
+    let blob: Blob | null = null;
+    for (let attempt = 0; attempt < 7; attempt++) {
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, "image/webp", quality));
+      if (blob && blob.type === "image/webp" && blob.size <= 450 * 1024) break;
+      if (attempt % 2 === 1) scale *= 0.82;
+      quality = Math.max(0.55, quality - 0.08);
+    }
+    bitmap.close();
+    if (!blob || blob.type !== "image/webp" || blob.size > 700 * 1024) {
+      throw new Error(tx("图片无法压缩到邮件签名可用的大小，请尝试更小的图片。", "This image could not be optimized for an email signature. Try a smaller image."));
+    }
+    const reader = new FileReader();
+    reader.onload = () => { signatureImageDraft.value = String(reader.result || ""); };
+    reader.onerror = () => { error.value = tx("读取图片失败，请重试。", "Could not read the image. Please try again."); };
+    reader.readAsDataURL(blob);
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : tx("图片处理失败，请重试。", "Image processing failed. Please try again.");
+  }
 }
 
 function escapeHtml(value: string) {
@@ -524,7 +551,7 @@ onMounted(() => void loadStatus());
       <footer><span>{{ status?.email }} · {{ compose.to.split(/[,;\s]+/).filter(Boolean).length }} {{ tx('位收件人','recipient(s)') }}</span><button type="submit" class="mail-primary" :disabled="busy">{{ busy ? tx("发送中…","Sending…") : tx("逐封发送","Send individually") }}</button></footer></form></div>
     <div v-if="settingsOpen" class="compose-backdrop" @click.self="settingsOpen=false"><section class="compose-card mail-settings-card" role="dialog" aria-modal="true" :aria-label="tx('邮件设置','Mail settings')"><header><div><p class="compose-eyebrow">VERA · BRAND VOICE</p><h2>{{ tx("邮件设置","Mail settings") }}</h2></div><button type="button" :aria-label="tx('关闭','Close')" @click="settingsOpen=false"><X :size="18" /></button></header>
       <form class="template-editor" @submit.prevent="saveTemplate"><h3>{{ tx("邮件模板","Email templates") }}</h3><div class="template-actions"><select v-model="templateSelected" @change="editTemplate(templateSelected)"><option value="">{{ tx('选择现有模板','Choose a template') }}</option><option v-for="template in preferences.templates" :key="template.id" :value="template.id">{{ template.name }}</option></select><button type="button" class="mail-icon-button" @click="templateSelected='';editTemplate()"><Plus :size="15" /> {{ tx('新模板','New template') }}</button></div><label>{{ tx("模板名称","Template name") }}<input v-model="templateDraft.name" required /></label><label>{{ tx("主题","Subject") }}<input v-model="templateDraft.subject" maxlength="500" /></label><label>{{ tx("正文","Message") }}<textarea v-model="templateDraft.body" rows="5"></textarea></label><button type="submit" class="mail-primary" :disabled="busy || !templateDraft.name.trim()"><Save :size="15" /> {{ tx('保存模板','Save template') }}</button></form>
-      <section class="signature-logo-editor"><h3>{{ tx("签名 Logo","Signature logo") }}</h3><p>{{ tx("上传或更换邮件签名中显示的公司 Logo。","Upload or replace the company logo shown in your email signature.") }}</p><input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="readSignatureImage" /><div class="signature-logo-actions"><button type="button" class="mail-icon-button" @click="imageInput?.click()"><ImagePlus :size="15" /> {{ tx('上传 Logo','Upload logo') }}</button><button v-if="signatureImageDraft" type="button" class="mail-icon-button" @click="signatureImageDraft=''">{{ tx('移除 Logo','Remove logo') }}</button></div><img v-if="signatureImageDraft" class="signature-preview" :src="signatureImageDraft" alt="Email signature logo preview" /><p v-else class="mail-help">{{ tx("尚未设置 Logo。","No logo is set yet.") }}</p><button type="button" class="mail-primary" :disabled="busy" @click="saveSignatureLogo">{{ busy ? tx('保存中…','Saving…') : tx('保存 Logo','Save logo') }}</button></section>
+      <section class="signature-logo-editor"><h3>{{ tx("签名 Logo","Signature logo") }}</h3><p>{{ tx("可上传不超过 5 MB 的 PNG、JPEG 或 WebP 图片；系统会自动优化图片尺寸，便于邮件使用。","Upload a PNG, JPEG or WebP image up to 5 MB. The image is optimized automatically for email.") }}</p><input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="readSignatureImage" /><div class="signature-logo-actions"><button type="button" class="mail-icon-button" @click="imageInput?.click()"><ImagePlus :size="15" /> {{ tx('上传 Logo','Upload logo') }}</button><button v-if="signatureImageDraft" type="button" class="mail-icon-button" @click="signatureImageDraft=''">{{ tx('移除 Logo','Remove logo') }}</button></div><img v-if="signatureImageDraft" class="signature-preview" :src="signatureImageDraft" alt="Email signature logo preview" /><p v-else class="mail-help">{{ tx("尚未设置 Logo。","No logo is set yet.") }}</p><button type="button" class="mail-primary" :disabled="busy" @click="saveSignatureLogo">{{ busy ? tx('保存中…','Saving…') : tx('保存 Logo','Save logo') }}</button></section>
       <form class="signature-editor" @submit.prevent="saveSignatureDesign"><h3>{{ tx("签名设计","Signature design") }}</h3><p class="signature-editor-help">{{ tx("在下方直接编辑签名。选择文字后可调整格式；“左右布局”会将现有 Logo 自动放到左栏，其余内容放到右栏。","Edit your signature below. Format selected text; “Side-by-side” places the existing logo on the left and the remaining content on the right.") }}</p><div class="signature-design-grid"><div class="signature-editor-workspace"><div class="signature-toolbar" role="toolbar" :aria-label="tx('签名格式工具栏','Signature formatting toolbar')"><select aria-label="Font family" title="Font family" @mousedown="rememberSignatureSelection" @change="applySignatureFont"><option value="Arial">Arial</option><option value="Georgia">Georgia</option><option value="Verdana">Verdana</option><option value="Tahoma">Tahoma</option><option value="Times New Roman">Times New Roman</option></select><select aria-label="Font size" title="Font size" @mousedown="rememberSignatureSelection" @change="applySignatureSize"><option value="2">Small</option><option value="3" selected>Normal</option><option value="4">Large</option><option value="5">Extra large</option></select><button type="button" class="format-button" title="Bold" aria-label="Bold" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('bold')"><strong>B</strong></button><button type="button" class="format-button italic" title="Italic" aria-label="Italic" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('italic')">I</button><button type="button" class="format-button underline" title="Underline" aria-label="Underline" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('underline')">U</button><input type="color" aria-label="Text color" title="Text color" value="#344956" @mousedown="rememberSignatureSelection" @input="applySignatureColor" /><button type="button" class="format-button" title="Align left" aria-label="Align left" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('justifyLeft')"><AlignLeft :size="15" /></button><button type="button" class="format-button" title="Align center" aria-label="Align center" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('justifyCenter')"><AlignCenter :size="15" /></button><button type="button" class="format-button" title="Align right" aria-label="Align right" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('justifyRight')"><AlignRight :size="15" /></button><select v-model="signatureLogoWidth" aria-label="Logo size" title="Logo size" @mousedown="rememberSignatureSelection" @change="resizeSignatureLogo"><option value="100px">Logo S</option><option value="140px">Logo M</option><option value="180px">Logo L</option><option value="240px">Logo XL</option></select><button type="button" class="mail-icon-button insert-logo-button" @mousedown.prevent="rememberSignatureSelection" @click="insertSignatureLogo"><ImagePlus :size="14" /> {{ tx('插入 Logo','Insert logo') }}</button><button type="button" class="mail-icon-button signature-layout-button" @mousedown.prevent="rememberSignatureSelection" @click="arrangeSignatureSideBySide">{{ tx('左右布局','Side-by-side') }}</button></div><div ref="signatureEditor" class="signature-design-canvas" contenteditable="true" role="textbox" aria-multiline="true" :aria-label="tx('邮件签名编辑区','Email signature editor')" @input="updateSignatureDraft" @mouseup="rememberSignatureSelection" @keyup="rememberSignatureSelection"></div></div><aside class="signature-preview-panel"><h4>{{ tx("预览","Preview") }}</h4><div class="signature-preview-canvas" v-html="sanitizeSignatureHtml(signatureHtmlDraft)"></div></aside></div><button type="submit" class="mail-primary signature-save" :disabled="busy">{{ busy ? tx('保存中…','Saving…') : tx('保存签名设计','Save signature design') }}</button></form>
     </section></div>
   </section>
