@@ -10,6 +10,8 @@ import json
 import secrets
 import time
 import os
+from html import escape as html_escape
+from html.parser import HTMLParser
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP, ROUND_UP
 from typing import Literal
@@ -26,6 +28,97 @@ from pydantic import BaseModel, Field, SecretStr, ConfigDict, field_validator, m
 # Latest client reply overrides the earlier 20% planning baseline.
 DEPOSIT_RATE = Decimal('0.60')
 ORDER_DATE_MIGRATION_ID = 'migration:order-date-from-deposit-v1'
+
+
+def sanitize_mail_signature(markup):
+    """Keep signature formatting and inline images while dropping executable markup."""
+    class SignatureParser(HTMLParser):
+        allowed = {'p', 'div', 'br', 'span', 'strong', 'b', 'em', 'i', 'u', 'font', 'a', 'img', 'ul', 'ol', 'li', 'table', 'tbody', 'tr', 'td'}
+        void = {'br', 'img'}
+        blocked = {'script', 'style', 'iframe', 'object', 'svg', 'math'}
+
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.output = []
+            self.stack = []
+            self.blocked_depth = 0
+
+        def handle_starttag(self, tag, attrs):
+            tag = tag.lower()
+            if tag in self.blocked:
+                self.blocked_depth += 1
+                return
+            if self.blocked_depth or tag not in self.allowed:
+                return
+            kept = []
+            for name, value in attrs:
+                name = name.lower()
+                value = (value or '').strip()
+                if name == 'style':
+                    styles = []
+                    for item in value.split(';'):
+                        if ':' not in item:
+                            continue
+                        prop, raw = item.split(':', 1)
+                        prop, raw = prop.strip().lower(), raw.strip()
+                        if not raw or any(char in raw for char in '{};') or 'url(' in raw.lower() or 'expression' in raw.lower():
+                            continue
+                        valid = (
+                            (prop == 'font-family' and re.fullmatch(r"[\w ,\"'_-]{1,90}", raw)) or
+                            (prop == 'font-size' and re.fullmatch(r'\d{1,3}(?:px|pt|em|rem|%)', raw)) or
+                            (prop in {'color', 'background-color'} and re.fullmatch(r'(?:#[\da-fA-F]{3,8}|[A-Za-z]{1,24}|rgba?\([\d.,% ]+\))', raw)) or
+                            (prop == 'text-align' and raw in {'left', 'center', 'right', 'justify'}) or
+                            (prop == 'font-weight' and raw in {'normal', 'bold', '400', '500', '600', '700', '800', '900'}) or
+                            (prop == 'font-style' and raw in {'normal', 'italic', 'oblique'}) or
+                            (prop == 'text-decoration' and raw in {'none', 'underline', 'line-through'}) or
+                            (prop in {'width', 'max-width', 'height', 'vertical-align', 'padding', 'padding-left', 'padding-right'} and re.fullmatch(r'[\w.% -]{1,32}', raw))
+                        )
+                        if valid:
+                            styles.append(f'{prop}:{raw}')
+                    if styles:
+                        kept.append(('style', ';'.join(styles)))
+                elif tag == 'img' and name == 'src' and re.fullmatch(r'data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+', value):
+                    kept.append(('src', value))
+                elif tag == 'img' and name == 'alt':
+                    kept.append(('alt', value[:240]))
+                elif tag == 'a' and name == 'href' and re.match(r'^(?:https?://|mailto:)', value, re.I):
+                    kept.append(('href', value[:1000]))
+                elif tag == 'font' and name in {'face', 'color'} and re.fullmatch(r'[\w #(),"_-]{1,90}', value):
+                    kept.append((name, value))
+                elif tag == 'font' and name == 'size' and re.fullmatch(r'[1-7]', value):
+                    kept.append((name, value))
+                elif tag in {'table', 'td'} and name in {'width', 'colspan', 'rowspan'} and re.fullmatch(r'\d{1,3}', value):
+                    kept.append((name, value))
+            rendered_attrs = ''.join(f' {name}="{html_escape(value, quote=True)}"' for name, value in kept)
+            self.output.append(f'<{tag}{rendered_attrs}>')
+            if tag not in self.void:
+                self.stack.append(tag)
+
+        def handle_startendtag(self, tag, attrs):
+            self.handle_starttag(tag, attrs)
+            if tag.lower() not in self.void:
+                self.handle_endtag(tag)
+
+        def handle_endtag(self, tag):
+            tag = tag.lower()
+            if tag in self.blocked and self.blocked_depth:
+                self.blocked_depth -= 1
+                return
+            if self.blocked_depth or tag not in self.stack:
+                return
+            index = len(self.stack) - 1 - self.stack[::-1].index(tag)
+            while len(self.stack) > index:
+                self.output.append(f'</{self.stack.pop()}>' )
+
+        def handle_data(self, data):
+            if not self.blocked_depth:
+                self.output.append(html_escape(data))
+
+    parser = SignatureParser()
+    parser.feed(markup or '')
+    while parser.stack:
+        parser.output.append(f'</{parser.stack.pop()}>' )
+    return ''.join(parser.output)
 
 
 def goods_arrived(order):
@@ -1015,6 +1108,7 @@ class MailboxPreferencesEdit(Input):
     templates: list[MailTemplate] | None = Field(default=None, max_length=30)
     signature_text: str | None = Field(default=None, max_length=10000)
     signature_image_data: str | None = Field(default=None, max_length=1500000)
+    signature_html: str | None = Field(default=None, max_length=1500000)
 
     @field_validator('signature_image_data')
     @classmethod
@@ -2178,10 +2272,10 @@ def register(app, s):
         with s.db() as c:
             row = c.execute("SELECT data FROM operations_records WHERE id='mailbox-preferences'").fetchone()
         if not row:
-            return {'templates': [], 'signature_text': '', 'signature_image_data': ''}
+            return {'templates': [], 'signature_text': '', 'signature_image_data': '', 'signature_html': None}
         saved = json.loads(row['data'])
         return {key: saved.get(key, default) for key, default in {
-            'templates': [], 'signature_text': '', 'signature_image_data': ''}.items()}
+            'templates': [], 'signature_text': '', 'signature_image_data': '', 'signature_html': None}.items()}
 
     @app.post('/api/operations/mailbox/preferences')
     def save_mailbox_preferences(body: MailboxPreferencesEdit, actor=Depends(s.require_admin)):
@@ -2189,12 +2283,14 @@ def register(app, s):
             c.execute('BEGIN IMMEDIATE')
             previous = c.execute("SELECT data FROM operations_records WHERE id='mailbox-preferences'").fetchone()
             current = json.loads(previous['data']) if previous else {
-                'templates': [], 'signature_text': '', 'signature_image_data': ''}
+                'templates': [], 'signature_text': '', 'signature_image_data': '', 'signature_html': None}
             updates = body.model_dump(exclude_unset=True, exclude_none=True, mode='json')
+            if 'signature_html' in updates:
+                updates['signature_html'] = sanitize_mail_signature(updates['signature_html'])
             saved = {**current, **updates, 'id': 'mailbox-preferences', 'updated_at': s.now(), 'updated_by': actor}
             put(c, 'setting', saved)
         return {key: saved.get(key, default) for key, default in {
-            'templates': [], 'signature_text': '', 'signature_image_data': ''}.items()}
+            'templates': [], 'signature_text': '', 'signature_image_data': '', 'signature_html': None}.items()}
 
     @app.post('/api/operations/mailbox/connect')
     def connect_mailbox(body: MailboxConnect, actor=Depends(s.require_admin)):

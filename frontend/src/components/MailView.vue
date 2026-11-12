@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { request, session } from "../crm-api";
-import { Mail, RefreshCw, PenLine, Archive, Trash2, Reply, Paperclip, X, Settings, Plus, UserRound, ImagePlus, Save } from "lucide-vue-next";
+import { AlignCenter, AlignLeft, AlignRight, Mail, RefreshCw, PenLine, Archive, Trash2, Reply, Paperclip, X, Settings, Plus, UserRound, ImagePlus, Save } from "lucide-vue-next";
 
 const { locale } = useI18n();
 const tx = (zh: string, en: string) => locale.value === "zh" ? zh : en;
@@ -12,7 +12,7 @@ type MailRow = { uid: string; from: string; to: string; subject: string; date: s
 type MailAttachment = { part: number; filename: string; content_type: string };
 type MailMessage = MailRow & { cc: string; in_reply_to: string; body: string; attachments: MailAttachment[] };
 type MailTemplate = { id: string; name: string; subject: string; body: string };
-type MailPreferences = { templates: MailTemplate[]; signature_text: string; signature_image_data: string };
+type MailPreferences = { templates: MailTemplate[]; signature_text: string; signature_image_data: string; signature_html?: string | null };
 type Customer = { customer_id: number; company: string; contact_name: string; email: string; customer_type?: string };
 const status = ref<MailStatus | null>(null);
 const folders = ref<MailFolder[]>([]);
@@ -28,12 +28,16 @@ const setup = reactive({ email: "Dylan@verashading.com", app_password: "" });
 const customers = ref<Customer[]>([]);
 const customerSearch = ref("");
 const selectedCustomerIds = ref<number[]>([]);
-const preferences = ref<MailPreferences>({ templates: [], signature_text: "", signature_image_data: "" });
+const preferences = ref<MailPreferences>({ templates: [], signature_text: "", signature_image_data: "", signature_html: null });
 const settingsOpen = ref(false);
 const templateDraft = reactive({ id: "", name: "", subject: "", body: "" });
 const templateSelected = ref("");
 const imageInput = ref<HTMLInputElement | null>(null);
 const signatureImageDraft = ref("");
+const signatureHtmlDraft = ref("");
+const signatureEditor = ref<HTMLDivElement | null>(null);
+let signatureSelection: Range | null = null;
+const signatureLogoWidth = ref("180px");
 const messagePurpose = ref("existing_notice");
 const consentConfirmed = ref(false);
 const consentSource = ref("");
@@ -68,7 +72,7 @@ async function loadCustomers() {
 
 async function loadMailPreferences() {
   try { preferences.value = await request<MailPreferences>("operations/mailbox/preferences"); }
-  catch { preferences.value = { templates: [], signature_text: "", signature_image_data: "" }; }
+  catch { preferences.value = { templates: [], signature_text: "", signature_image_data: "", signature_html: null }; }
 }
 
 function toggleCustomerRecipient(customer: Customer) {
@@ -100,8 +104,14 @@ async function saveTemplate() {
   await saveMailPreferences({ templates }, tx("邮件模板已保存。", "Email template saved."));
 }
 
-async function saveSignatureText() {
-  await saveMailPreferences({ signature_text: preferences.value.signature_text }, tx("邮件签名已保存。", "Email signature saved."));
+async function saveSignatureDesign() {
+  if (!signatureEditor.value) return;
+  const signatureHtml = sanitizeSignatureHtml(signatureEditor.value.innerHTML);
+  signatureHtmlDraft.value = signatureHtml;
+  const plainText = signatureTextFromHtml(signatureHtml);
+  await saveMailPreferences({ signature_html: signatureHtml, signature_text: plainText }, tx("签名排版已保存。", "Signature design saved."));
+  await nextTick();
+  if (signatureEditor.value) signatureEditor.value.innerHTML = preferences.value.signature_html || "";
 }
 
 async function saveSignatureLogo() {
@@ -121,7 +131,132 @@ async function saveMailPreferences(changes: Partial<MailPreferences>, successMes
 function openMailSettings() {
   signatureImageDraft.value = preferences.value.signature_image_data;
   editTemplate(templateSelected.value);
+  signatureHtmlDraft.value = preferences.value.signature_html != null ? preferences.value.signature_html : legacySignatureHtml();
   settingsOpen.value = true;
+  void nextTick(() => {
+    if (signatureEditor.value) signatureEditor.value.innerHTML = signatureHtmlDraft.value;
+  });
+}
+
+function legacySignatureHtml() {
+  const text = preferences.value.signature_text.split(/\r?\n/).map(line => line.trim() ? `<p>${escapeHtml(line)}</p>` : "<p><br></p>").join("");
+  const image = preferences.value.signature_image_data ? `<p><img src="${preferences.value.signature_image_data}" alt="VERA Shading Solutions" style="max-width:180px;height:auto"></p>` : "";
+  return `${text}${image}`;
+}
+
+function signatureTextFromHtml(markup: string) {
+  const document = new DOMParser().parseFromString(markup, "text/html");
+  return (document.body.innerText || document.body.textContent || "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function sanitizeSignatureHtml(markup: string) {
+  const document = new DOMParser().parseFromString(markup, "text/html");
+  const allowed = new Set(["P", "DIV", "BR", "SPAN", "STRONG", "B", "EM", "I", "U", "FONT", "A", "IMG", "UL", "OL", "LI", "TABLE", "TBODY", "TR", "TD"]);
+  for (const element of [...document.body.querySelectorAll("*")]) {
+    if (!allowed.has(element.tagName)) { element.replaceWith(...element.childNodes); continue; }
+    for (const attribute of [...element.attributes]) {
+      const name = attribute.name.toLowerCase();
+      const value = attribute.value.trim();
+      if (name === "style") {
+        const styles = value.split(";").map(part => part.split(/:(.*)/s)).filter(parts => parts.length > 1).flatMap(([property, raw]) => {
+          const key = property.trim().toLowerCase(); const item = raw.trim();
+          const permitted = key === "font-family" ? /^[\w ,"'-]{1,90}$/.test(item)
+            : key === "font-size" ? /^\d{1,3}(?:px|pt|em|rem|%)$/.test(item)
+            : key === "color" || key === "background-color" ? /^(?:#[\da-f]{3,8}|[a-z]{1,24}|rgba?\([\d.,% ]+\))$/i.test(item)
+            : key === "text-align" ? /^(left|center|right|justify)$/.test(item)
+            : key === "font-weight" ? /^(normal|bold|[1-9]00)$/.test(item)
+            : key === "font-style" ? /^(normal|italic|oblique)$/.test(item)
+            : key === "text-decoration" ? /^(none|underline|line-through)$/.test(item)
+            : ["width", "max-width", "height", "vertical-align", "padding", "padding-left", "padding-right"].includes(key) && /^[\w.% -]{1,32}$/.test(item);
+          return permitted ? [`${key}:${item}`] : [];
+        });
+        if (styles.length) element.setAttribute("style", styles.join(";")); else element.removeAttribute("style");
+      } else if (element.tagName === "IMG" && name === "src" && /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(value)) {
+        element.setAttribute("src", value);
+      } else if (element.tagName === "A" && name === "href" && /^(?:https?:|mailto:)/i.test(value)) {
+        element.setAttribute("href", value);
+      } else if ((element.tagName === "IMG" && name === "alt") || (element.tagName === "FONT" && ["face", "size", "color"].includes(name))) {
+        if (name !== "size" || /^[1-7]$/.test(value)) element.setAttribute(name, value);
+        else element.removeAttribute(name);
+      } else if ((element.tagName === "TD" || element.tagName === "TABLE") && ["colspan", "rowspan", "width"].includes(name) && /^\d{1,3}$/.test(value)) {
+        element.setAttribute(name, value);
+      } else element.removeAttribute(name);
+    }
+    if (element.tagName === "IMG" && !element.hasAttribute("src")) element.remove();
+  }
+  return document.body.innerHTML;
+}
+
+function rememberSignatureSelection() {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || !signatureEditor.value) return;
+  const range = selection.getRangeAt(0);
+  if (signatureEditor.value.contains(range.commonAncestorContainer)) signatureSelection = range.cloneRange();
+}
+
+function restoreSignatureSelection() {
+  if (!signatureEditor.value) return;
+  signatureEditor.value.focus();
+  if (!signatureSelection) return;
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(signatureSelection);
+}
+
+function formatSignature(command: string, value?: string) {
+  restoreSignatureSelection();
+  document.execCommand("styleWithCSS", false, "true");
+  document.execCommand(command, false, value);
+  signatureHtmlDraft.value = signatureEditor.value?.innerHTML || "";
+  rememberSignatureSelection();
+}
+
+function applySignatureFont(event: Event) {
+  formatSignature("fontName", (event.target as HTMLSelectElement).value);
+}
+
+function applySignatureSize(event: Event) {
+  formatSignature("fontSize", (event.target as HTMLSelectElement).value);
+}
+
+function applySignatureColor(event: Event) {
+  formatSignature("foreColor", (event.target as HTMLInputElement).value);
+}
+
+function resizeSignatureLogo(event: Event) {
+  signatureLogoWidth.value = (event.target as HTMLSelectElement).value;
+  restoreSignatureSelection();
+  const selection = window.getSelection();
+  let node: Node | null = selection?.anchorNode || null;
+  if (node?.nodeType === Node.TEXT_NODE) node = node.parentElement;
+  if (node && !(node instanceof HTMLImageElement)) {
+    const offset = selection?.anchorOffset || 0;
+    const candidate = node.childNodes[offset] || node.childNodes[offset - 1];
+    if (candidate instanceof HTMLImageElement) node = candidate;
+  }
+  if (node instanceof HTMLImageElement) {
+    node.style.width = signatureLogoWidth.value;
+    node.style.maxWidth = "100%";
+    signatureHtmlDraft.value = signatureEditor.value?.innerHTML || "";
+    rememberSignatureSelection();
+  }
+}
+
+function insertSignatureLogo() {
+  const logo = signatureImageDraft.value || preferences.value.signature_image_data;
+  if (!logo) {
+    error.value = tx("请先在上方上传并保存 Logo。", "Upload and save the logo above first.");
+    return;
+  }
+  restoreSignatureSelection();
+  document.execCommand("insertHTML", false, `<img src="${logo}" alt="VERA Shading Solutions" style="width:${signatureLogoWidth.value};max-width:100%;height:auto;vertical-align:middle">`);
+  signatureHtmlDraft.value = signatureEditor.value?.innerHTML || "";
+  rememberSignatureSelection();
+}
+
+function updateSignatureDraft() {
+  signatureHtmlDraft.value = signatureEditor.value?.innerHTML || "";
+  rememberSignatureSelection();
 }
 
 function readSignatureImage(event: Event) {
@@ -221,9 +356,9 @@ async function sendMessage() {
       throw new Error(tx("商业邮件需要确认收件人同意，并记录同意依据。", "Commercial email requires confirmed recipient consent and a recorded consent source."));
     }
     const unsubscribe = commercial ? `<p style=\"font-size:12px;color:#687984\">To stop receiving further commercial emails, reply to <a href=\"mailto:${escapeHtml(status.value?.email || '')}?subject=UNSUBSCRIBE\">the sender</a> with UNSUBSCRIBE.</p>` : "";
-    const signatureText = preferences.value.signature_text.split(/\r?\n/).map(escapeHtml).join("<br>");
-    const signatureImage = preferences.value.signature_image_data ? `<p><img src=\"${preferences.value.signature_image_data}\" alt=\"VERA Shading Solutions\" style=\"max-width:240px;max-height:90px\"></p>` : "";
-    const signatureHtml = signatureText || signatureImage ? `<div style=\"margin-top:20px;padding-top:12px;border-top:1px solid #d6e0e5\">${signatureText ? `<p>${signatureText}</p>` : ""}${signatureImage}</div>` : "";
+    const legacySignature = legacySignatureHtml();
+    const signatureMarkup = preferences.value.signature_html != null ? preferences.value.signature_html : legacySignature;
+    const signatureHtml = signatureMarkup ? `<div style=\"margin-top:20px;padding-top:12px;border-top:1px solid #d6e0e5\">${signatureMarkup}</div>` : "";
     const plainBody = [compose.body, preferences.value.signature_text, commercial ? `To stop receiving further commercial emails, reply to ${status.value?.email || 'the sender'} with UNSUBSCRIBE.` : ""].filter(Boolean).join("\n\n");
     const htmlBody = `<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#304451\">${escapeHtml(compose.body).replace(/\r?\n/g, "<br>")}${signatureHtml}${unsubscribe}</div>`;
     let sentCount = 0;
@@ -314,7 +449,7 @@ onMounted(() => void loadStatus());
     <div v-if="settingsOpen" class="compose-backdrop" @click.self="settingsOpen=false"><section class="compose-card mail-settings-card" role="dialog" aria-modal="true" :aria-label="tx('邮件设置','Mail settings')"><header><div><p class="compose-eyebrow">VERA · BRAND VOICE</p><h2>{{ tx("邮件设置","Mail settings") }}</h2></div><button type="button" :aria-label="tx('关闭','Close')" @click="settingsOpen=false"><X :size="18" /></button></header>
       <form class="template-editor" @submit.prevent="saveTemplate"><h3>{{ tx("邮件模板","Email templates") }}</h3><div class="template-actions"><select v-model="templateSelected" @change="editTemplate(templateSelected)"><option value="">{{ tx('选择现有模板','Choose a template') }}</option><option v-for="template in preferences.templates" :key="template.id" :value="template.id">{{ template.name }}</option></select><button type="button" class="mail-icon-button" @click="templateSelected='';editTemplate()"><Plus :size="15" /> {{ tx('新模板','New template') }}</button></div><label>{{ tx("模板名称","Template name") }}<input v-model="templateDraft.name" required /></label><label>{{ tx("主题","Subject") }}<input v-model="templateDraft.subject" maxlength="500" /></label><label>{{ tx("正文","Message") }}<textarea v-model="templateDraft.body" rows="5"></textarea></label><button type="submit" class="mail-primary" :disabled="busy || !templateDraft.name.trim()"><Save :size="15" /> {{ tx('保存模板','Save template') }}</button></form>
       <section class="signature-logo-editor"><h3>{{ tx("签名 Logo","Signature logo") }}</h3><p>{{ tx("上传或更换邮件签名中显示的公司 Logo。","Upload or replace the company logo shown in your email signature.") }}</p><input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="readSignatureImage" /><div class="signature-logo-actions"><button type="button" class="mail-icon-button" @click="imageInput?.click()"><ImagePlus :size="15" /> {{ tx('上传 Logo','Upload logo') }}</button><button v-if="signatureImageDraft" type="button" class="mail-icon-button" @click="signatureImageDraft=''">{{ tx('移除 Logo','Remove logo') }}</button></div><img v-if="signatureImageDraft" class="signature-preview" :src="signatureImageDraft" alt="Email signature logo preview" /><p v-else class="mail-help">{{ tx("尚未设置 Logo。","No logo is set yet.") }}</p><button type="button" class="mail-primary" :disabled="busy" @click="saveSignatureLogo">{{ busy ? tx('保存中…','Saving…') : tx('保存 Logo','Save logo') }}</button></section>
-      <form class="signature-editor" @submit.prevent="saveSignatureText"><h3>{{ tx("邮件签名文字","Email signature text") }}</h3><label>{{ tx("签名内容","Signature text") }}<textarea v-model="preferences.signature_text" rows="4" placeholder="Name · VERA Shading Solutions · Contact details"></textarea></label><button type="submit" class="mail-primary" :disabled="busy">{{ busy ? tx('保存中…','Saving…') : tx('保存签名','Save signature') }}</button></form>
+      <form class="signature-editor" @submit.prevent="saveSignatureDesign"><h3>{{ tx("签名设计","Signature design") }}</h3><p class="signature-editor-help">{{ tx("在下方直接编辑签名。选择文字后可调整格式；将光标放到想要的位置，再插入 Logo。","Edit your signature below. Select text to format it, then place the cursor where you want the logo and insert it.") }}</p><div class="signature-design-grid"><div class="signature-editor-workspace"><div class="signature-toolbar" role="toolbar" :aria-label="tx('签名格式工具栏','Signature formatting toolbar')"><select aria-label="Font family" title="Font family" @mousedown="rememberSignatureSelection" @change="applySignatureFont"><option value="Arial">Arial</option><option value="Georgia">Georgia</option><option value="Verdana">Verdana</option><option value="Tahoma">Tahoma</option><option value="Times New Roman">Times New Roman</option></select><select aria-label="Font size" title="Font size" @mousedown="rememberSignatureSelection" @change="applySignatureSize"><option value="2">Small</option><option value="3" selected>Normal</option><option value="4">Large</option><option value="5">Extra large</option></select><button type="button" class="format-button" title="Bold" aria-label="Bold" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('bold')"><strong>B</strong></button><button type="button" class="format-button italic" title="Italic" aria-label="Italic" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('italic')">I</button><button type="button" class="format-button underline" title="Underline" aria-label="Underline" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('underline')">U</button><input type="color" aria-label="Text color" title="Text color" value="#344956" @mousedown="rememberSignatureSelection" @input="applySignatureColor" /><button type="button" class="format-button" title="Align left" aria-label="Align left" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('justifyLeft')"><AlignLeft :size="15" /></button><button type="button" class="format-button" title="Align center" aria-label="Align center" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('justifyCenter')"><AlignCenter :size="15" /></button><button type="button" class="format-button" title="Align right" aria-label="Align right" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('justifyRight')"><AlignRight :size="15" /></button><select v-model="signatureLogoWidth" aria-label="Logo size" title="Logo size" @mousedown="rememberSignatureSelection" @change="resizeSignatureLogo"><option value="100px">Logo S</option><option value="140px">Logo M</option><option value="180px">Logo L</option><option value="240px">Logo XL</option></select><button type="button" class="mail-icon-button insert-logo-button" @mousedown.prevent="rememberSignatureSelection" @click="insertSignatureLogo"><ImagePlus :size="14" /> {{ tx('插入 Logo','Insert logo') }}</button></div><div ref="signatureEditor" class="signature-design-canvas" contenteditable="true" role="textbox" aria-multiline="true" :aria-label="tx('邮件签名编辑区','Email signature editor')" @input="updateSignatureDraft" @mouseup="rememberSignatureSelection" @keyup="rememberSignatureSelection"></div></div><aside class="signature-preview-panel"><h4>{{ tx("预览","Preview") }}</h4><div class="signature-preview-canvas" v-html="sanitizeSignatureHtml(signatureHtmlDraft)"></div></aside></div><button type="submit" class="mail-primary signature-save" :disabled="busy">{{ busy ? tx('保存中…','Saving…') : tx('保存签名设计','Save signature design') }}</button></form>
     </section></div>
   </section>
 </template>
@@ -375,10 +510,33 @@ onMounted(() => void loadStatus());
 .compose-card>label{display:grid;gap:5px;color:#425966;font-size:12px;font-weight:650}.compose-card textarea{resize:vertical;line-height:1.5}
 .compose-card footer{position:sticky;bottom:-19px;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px -19px -19px;padding:12px 19px;border-top:1px solid #e5ebee;background:#fff}.compose-card footer span{color:#687b86;font-size:11px}
 .mail-settings-card{width:min(760px,96vw);gap:13px}.template-editor,.signature-editor,.signature-logo-editor{gap:10px;padding:13px;border:1px solid #d8e2e7;border-radius:9px;background:#f8fafb}.mail-settings-card h3{margin:0;font-size:15px;color:#344956}.signature-logo-editor{display:grid}.signature-logo-editor>p{margin:0;color:#647782;font-size:12px;line-height:1.5}.signature-logo-actions{display:flex;gap:8px;flex-wrap:wrap}.signature-logo-editor>.mail-help{margin:0}
+.signature-editor-help{margin:0;color:#647782;font-size:12px;line-height:1.5}
+.signature-design-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(210px,.8fr);gap:12px;align-items:stretch}
+.signature-editor-workspace,.signature-preview-panel{min-width:0;border:1px solid #d7e1e6;border-radius:8px;background:#fff;overflow:hidden}
+.signature-toolbar{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:7px;border-bottom:1px solid #dfe7eb;background:#f3f6f7}
+.signature-toolbar select{width:auto;min-width:72px;height:32px;min-height:32px!important;padding:3px 6px;border:1px solid #cfdae0;border-radius:5px;background:#fff;color:#40515c;font:inherit;font-size:11px}
+.signature-toolbar select:first-child{min-width:112px}
+.mail-workspace .signature-toolbar button.format-button{display:grid;place-items:center;width:30px;height:30px;min-width:30px;min-height:30px!important;padding:0;border:1px solid #d0dbe1;border-radius:5px;background:#fff;color:#405969;font-size:13px}
+.mail-workspace .signature-toolbar button.format-button:hover{background:#e7eef2}
+.signature-toolbar input[type=color]{width:32px;height:32px;min-width:32px;min-height:32px!important;padding:3px;border:1px solid #cfdae0;border-radius:5px;background:#fff}
+.mail-workspace .signature-toolbar button.insert-logo-button{min-height:32px!important;padding:3px 8px;font-size:11px}
+.signature-design-canvas{min-height:190px;max-height:280px;overflow:auto;padding:14px 16px;outline:none;background:#fff;color:#344956;font:13px/1.55 Arial,sans-serif;overflow-wrap:anywhere}
+.signature-design-canvas:focus{box-shadow:inset 0 0 0 2px #9eafba}
+.signature-design-canvas:empty:before{content:"Type your name and contact details…";color:#9aa8af;pointer-events:none}
+.signature-design-canvas p{margin:0 0 7px}.signature-design-canvas p:last-child{margin-bottom:0}
+.signature-preview-panel{padding:12px;background:#f3f6f7}
+.signature-preview-panel h4{margin:0 0 9px;color:#60727d;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+.signature-preview-canvas{min-height:162px;padding:13px;border:1px solid #e0e7eb;border-radius:5px;background:#fff;color:#344956;font:13px/1.55 Arial,sans-serif;overflow-wrap:anywhere}
+.signature-preview-canvas :deep(p){margin:0 0 7px}.signature-preview-canvas :deep(p:last-child){margin-bottom:0}
+.signature-preview-canvas :deep(img){max-width:100%;height:auto;vertical-align:middle}
+.signature-preview-canvas :deep(table){max-width:100%;border-collapse:collapse}
+.signature-preview-canvas :deep(td){vertical-align:middle}
+.signature-save{justify-self:start}
 .template-editor>label,.signature-editor>label{font-size:12px;color:#425966}.template-editor textarea,.signature-editor textarea{min-height:92px}
 .signature-preview{max-width:260px;max-height:100px}
 @media(max-width:1050px){.mail-client{grid-template-columns:165px minmax(270px,330px) minmax(0,1fr)}.mail-reader-content{padding:18px}.mail-reader-head{display:grid}.mail-reader-actions{justify-content:flex-start}}
 @media(max-width:760px){.mail-workspace{min-height:calc(100dvh - 110px)}.mail-page-head{align-items:flex-start;flex-direction:column}.mail-head-actions{width:100%;flex-wrap:wrap}.mail-client{height:auto;min-height:78dvh;grid-template-columns:118px minmax(0,1fr);grid-template-rows:minmax(270px,42dvh) minmax(340px,1fr)}.mail-sidebar{grid-column:1;grid-row:1/3;padding:9px 5px}.mail-folder{min-height:38px;padding:0 8px;font-size:11px}.mail-message-list{grid-column:2;grid-row:1;border-right:0;border-bottom:1px solid #e1e8ec}.mail-reader{grid-column:2;grid-row:2}.mail-reader-content{padding:14px}.mail-list-toolbar{padding:10px}.mail-list-toolbar input{width:100%}.mail-row{min-height:66px;padding:10px}.mail-connect-card{margin-top:10px;padding:18px}}
 @media(max-width:900px){.mail-client{grid-template-columns:130px minmax(220px,35%) minmax(300px,1fr)}.mail-reader-head{display:grid}.mail-reader-actions{justify-content:flex-start}}
 @media(max-width:760px){.mail-client{grid-template-columns:118px minmax(0,1fr)}}
+@media(max-width:800px){.signature-design-grid{grid-template-columns:1fr}.signature-preview-canvas{min-height:90px}.signature-design-canvas{min-height:160px}}
 </style>
