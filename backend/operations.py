@@ -2306,7 +2306,7 @@ def register(app, s):
     @app.post('/api/operations/invoice-template-preview')
     def invoice_template_preview(body: InvoiceTemplatePreview, actor=Depends(s.require_admin)):
         model = invoice_mail.sample_preview(body.invoice_template.model_dump(), body.payment_details.model_dump(), body.kind)
-        return {'html': model['html']}
+        return {'html': model['preview_html']}
 
     def mailbox_cipher():
         from cryptography.fernet import Fernet

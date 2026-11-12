@@ -198,7 +198,9 @@ def sample_preview(template, payment, kind):
                   else [{'description': 'Additional installation service', 'amount': '460.00'}]),
     }
     orders = {'preview-order': {'order_number': 'AA-METCALFE', 'project_name': 'Living room shutters', 'site_address': 'Auckland', 'total': '2001.77', 'tax_rate': '0.15'}}
-    return build(invoice, customer, orders, payment)
+    model = build(invoice, customer, orders, payment)
+    model['preview_html'] = _html(model, a4=True)
+    return model
 
 
 def _columns(m):
@@ -292,7 +294,7 @@ def _html_legacy(m):
 </table></td></tr></table></body></html>'''
 
 
-def _html(m):
+def _html(m, a4=False):
     e = escape
     accent, ink, line = '#405969', '#263640', '#dce4e8'
     labels = _columns(m)
@@ -337,6 +339,11 @@ def _html(m):
         elif bid == 'footer':
             sections.append(f'<div style="text-align:{align};border-top:1px solid {line};padding-top:12px;font-size:12px;color:#52636d">{e(m["footer"])}<br><small>The PDF invoice is attached to this email.</small></div>')
     content = ''.join(sections)
+    if a4:
+        return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=794,initial-scale=1"><style>
+*{{box-sizing:border-box}}html,body{{margin:0;width:794px;height:1123px;overflow:hidden!important;background:#fff;font-family:Arial,Helvetica,sans-serif;color:{ink}}}
+@page{{size:A4;margin:0}}#paper{{width:794px;height:1123px;padding:42px 46px;overflow:hidden;background:#fff}}
+</style></head><body><main id="paper">{content}</main></body></html>'''
     return f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:20px 10px;background:#f1f4f5;font-family:Arial,sans-serif;color:{ink}"><table width="100%"><tr><td align="center"><table width="680" style="max-width:680px;width:100%;background:#fff;border:1px solid {line};border-radius:10px"><tr><td style="padding:26px 30px">{content}</td></tr></table></td></tr></table></body></html>'
 
 
