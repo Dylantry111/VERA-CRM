@@ -254,6 +254,82 @@ function insertSignatureLogo() {
   rememberSignatureSelection();
 }
 
+function arrangeSignatureSideBySide() {
+  const editor = signatureEditor.value;
+  if (!editor) return;
+  if (editor.querySelector("table")) {
+    error.value = tx("签名已经是左右布局，可以直接编辑两侧内容。", "This signature already uses a side-by-side layout. Edit either column directly.");
+    return;
+  }
+
+  const existingLogo = editor.querySelector("img");
+  const logoParagraph = existingLogo?.closest("p, div") || null;
+  const nodes = Array.from(editor.childNodes);
+  const tagline = nodes.find(node => (node.textContent || "").trim().toLowerCase() === "made for trade. built on trust.");
+
+  const table = document.createElement("table");
+  table.dataset.signatureLayout = "columns";
+  table.setAttribute("width", "100%");
+  table.style.width = "100%";
+  table.style.borderCollapse = "collapse";
+  table.style.fontFamily = "Arial, sans-serif";
+  const body = document.createElement("tbody");
+  const row = document.createElement("tr");
+  const brandCell = document.createElement("td");
+  brandCell.style.width = "38%";
+  brandCell.style.paddingRight = "18px";
+  brandCell.style.verticalAlign = "middle";
+  brandCell.style.textAlign = "center";
+  const detailsCell = document.createElement("td");
+  detailsCell.style.width = "62%";
+  detailsCell.style.paddingLeft = "18px";
+  detailsCell.style.verticalAlign = "middle";
+
+  if (existingLogo) {
+    const logo = existingLogo.cloneNode(true) as HTMLImageElement;
+    logo.style.display = "block";
+    logo.style.maxWidth = "100%";
+    logo.style.height = "auto";
+    brandCell.append(logo);
+  } else {
+    const placeholder = document.createElement("p");
+    placeholder.textContent = tx("在这里放置 Logo", "Place your logo here");
+    brandCell.append(placeholder);
+  }
+  if (tagline) brandCell.append(tagline.cloneNode(true));
+
+  for (const node of nodes) {
+    if (node === tagline) continue;
+    const content = node.cloneNode(true);
+    if (content.nodeType === Node.ELEMENT_NODE) {
+      const element = content as HTMLElement;
+      if (node === logoParagraph) element.querySelectorAll("img").forEach(image => image.remove());
+      if ((element.textContent || "").trim() || element.querySelector("img,br,table")) detailsCell.append(element);
+    } else if ((content.textContent || "").trim()) {
+      detailsCell.append(content);
+    }
+  }
+  if (!detailsCell.childNodes.length) {
+    const placeholder = document.createElement("p");
+    placeholder.innerHTML = "<br>";
+    detailsCell.append(placeholder);
+  }
+
+  row.append(brandCell, detailsCell);
+  body.append(row);
+  table.append(body);
+  editor.replaceChildren(table);
+
+  const range = document.createRange();
+  range.selectNodeContents(brandCell);
+  range.collapse(false);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  signatureSelection = range.cloneRange();
+  signatureHtmlDraft.value = editor.innerHTML;
+}
+
 function updateSignatureDraft() {
   signatureHtmlDraft.value = signatureEditor.value?.innerHTML || "";
   rememberSignatureSelection();
@@ -449,7 +525,7 @@ onMounted(() => void loadStatus());
     <div v-if="settingsOpen" class="compose-backdrop" @click.self="settingsOpen=false"><section class="compose-card mail-settings-card" role="dialog" aria-modal="true" :aria-label="tx('邮件设置','Mail settings')"><header><div><p class="compose-eyebrow">VERA · BRAND VOICE</p><h2>{{ tx("邮件设置","Mail settings") }}</h2></div><button type="button" :aria-label="tx('关闭','Close')" @click="settingsOpen=false"><X :size="18" /></button></header>
       <form class="template-editor" @submit.prevent="saveTemplate"><h3>{{ tx("邮件模板","Email templates") }}</h3><div class="template-actions"><select v-model="templateSelected" @change="editTemplate(templateSelected)"><option value="">{{ tx('选择现有模板','Choose a template') }}</option><option v-for="template in preferences.templates" :key="template.id" :value="template.id">{{ template.name }}</option></select><button type="button" class="mail-icon-button" @click="templateSelected='';editTemplate()"><Plus :size="15" /> {{ tx('新模板','New template') }}</button></div><label>{{ tx("模板名称","Template name") }}<input v-model="templateDraft.name" required /></label><label>{{ tx("主题","Subject") }}<input v-model="templateDraft.subject" maxlength="500" /></label><label>{{ tx("正文","Message") }}<textarea v-model="templateDraft.body" rows="5"></textarea></label><button type="submit" class="mail-primary" :disabled="busy || !templateDraft.name.trim()"><Save :size="15" /> {{ tx('保存模板','Save template') }}</button></form>
       <section class="signature-logo-editor"><h3>{{ tx("签名 Logo","Signature logo") }}</h3><p>{{ tx("上传或更换邮件签名中显示的公司 Logo。","Upload or replace the company logo shown in your email signature.") }}</p><input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden @change="readSignatureImage" /><div class="signature-logo-actions"><button type="button" class="mail-icon-button" @click="imageInput?.click()"><ImagePlus :size="15" /> {{ tx('上传 Logo','Upload logo') }}</button><button v-if="signatureImageDraft" type="button" class="mail-icon-button" @click="signatureImageDraft=''">{{ tx('移除 Logo','Remove logo') }}</button></div><img v-if="signatureImageDraft" class="signature-preview" :src="signatureImageDraft" alt="Email signature logo preview" /><p v-else class="mail-help">{{ tx("尚未设置 Logo。","No logo is set yet.") }}</p><button type="button" class="mail-primary" :disabled="busy" @click="saveSignatureLogo">{{ busy ? tx('保存中…','Saving…') : tx('保存 Logo','Save logo') }}</button></section>
-      <form class="signature-editor" @submit.prevent="saveSignatureDesign"><h3>{{ tx("签名设计","Signature design") }}</h3><p class="signature-editor-help">{{ tx("在下方直接编辑签名。选择文字后可调整格式；将光标放到想要的位置，再插入 Logo。","Edit your signature below. Select text to format it, then place the cursor where you want the logo and insert it.") }}</p><div class="signature-design-grid"><div class="signature-editor-workspace"><div class="signature-toolbar" role="toolbar" :aria-label="tx('签名格式工具栏','Signature formatting toolbar')"><select aria-label="Font family" title="Font family" @mousedown="rememberSignatureSelection" @change="applySignatureFont"><option value="Arial">Arial</option><option value="Georgia">Georgia</option><option value="Verdana">Verdana</option><option value="Tahoma">Tahoma</option><option value="Times New Roman">Times New Roman</option></select><select aria-label="Font size" title="Font size" @mousedown="rememberSignatureSelection" @change="applySignatureSize"><option value="2">Small</option><option value="3" selected>Normal</option><option value="4">Large</option><option value="5">Extra large</option></select><button type="button" class="format-button" title="Bold" aria-label="Bold" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('bold')"><strong>B</strong></button><button type="button" class="format-button italic" title="Italic" aria-label="Italic" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('italic')">I</button><button type="button" class="format-button underline" title="Underline" aria-label="Underline" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('underline')">U</button><input type="color" aria-label="Text color" title="Text color" value="#344956" @mousedown="rememberSignatureSelection" @input="applySignatureColor" /><button type="button" class="format-button" title="Align left" aria-label="Align left" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('justifyLeft')"><AlignLeft :size="15" /></button><button type="button" class="format-button" title="Align center" aria-label="Align center" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('justifyCenter')"><AlignCenter :size="15" /></button><button type="button" class="format-button" title="Align right" aria-label="Align right" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('justifyRight')"><AlignRight :size="15" /></button><select v-model="signatureLogoWidth" aria-label="Logo size" title="Logo size" @mousedown="rememberSignatureSelection" @change="resizeSignatureLogo"><option value="100px">Logo S</option><option value="140px">Logo M</option><option value="180px">Logo L</option><option value="240px">Logo XL</option></select><button type="button" class="mail-icon-button insert-logo-button" @mousedown.prevent="rememberSignatureSelection" @click="insertSignatureLogo"><ImagePlus :size="14" /> {{ tx('插入 Logo','Insert logo') }}</button></div><div ref="signatureEditor" class="signature-design-canvas" contenteditable="true" role="textbox" aria-multiline="true" :aria-label="tx('邮件签名编辑区','Email signature editor')" @input="updateSignatureDraft" @mouseup="rememberSignatureSelection" @keyup="rememberSignatureSelection"></div></div><aside class="signature-preview-panel"><h4>{{ tx("预览","Preview") }}</h4><div class="signature-preview-canvas" v-html="sanitizeSignatureHtml(signatureHtmlDraft)"></div></aside></div><button type="submit" class="mail-primary signature-save" :disabled="busy">{{ busy ? tx('保存中…','Saving…') : tx('保存签名设计','Save signature design') }}</button></form>
+      <form class="signature-editor" @submit.prevent="saveSignatureDesign"><h3>{{ tx("签名设计","Signature design") }}</h3><p class="signature-editor-help">{{ tx("在下方直接编辑签名。选择文字后可调整格式；“左右布局”会将现有 Logo 自动放到左栏，其余内容放到右栏。","Edit your signature below. Format selected text; “Side-by-side” places the existing logo on the left and the remaining content on the right.") }}</p><div class="signature-design-grid"><div class="signature-editor-workspace"><div class="signature-toolbar" role="toolbar" :aria-label="tx('签名格式工具栏','Signature formatting toolbar')"><select aria-label="Font family" title="Font family" @mousedown="rememberSignatureSelection" @change="applySignatureFont"><option value="Arial">Arial</option><option value="Georgia">Georgia</option><option value="Verdana">Verdana</option><option value="Tahoma">Tahoma</option><option value="Times New Roman">Times New Roman</option></select><select aria-label="Font size" title="Font size" @mousedown="rememberSignatureSelection" @change="applySignatureSize"><option value="2">Small</option><option value="3" selected>Normal</option><option value="4">Large</option><option value="5">Extra large</option></select><button type="button" class="format-button" title="Bold" aria-label="Bold" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('bold')"><strong>B</strong></button><button type="button" class="format-button italic" title="Italic" aria-label="Italic" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('italic')">I</button><button type="button" class="format-button underline" title="Underline" aria-label="Underline" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('underline')">U</button><input type="color" aria-label="Text color" title="Text color" value="#344956" @mousedown="rememberSignatureSelection" @input="applySignatureColor" /><button type="button" class="format-button" title="Align left" aria-label="Align left" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('justifyLeft')"><AlignLeft :size="15" /></button><button type="button" class="format-button" title="Align center" aria-label="Align center" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('justifyCenter')"><AlignCenter :size="15" /></button><button type="button" class="format-button" title="Align right" aria-label="Align right" @mousedown.prevent="rememberSignatureSelection" @click="formatSignature('justifyRight')"><AlignRight :size="15" /></button><select v-model="signatureLogoWidth" aria-label="Logo size" title="Logo size" @mousedown="rememberSignatureSelection" @change="resizeSignatureLogo"><option value="100px">Logo S</option><option value="140px">Logo M</option><option value="180px">Logo L</option><option value="240px">Logo XL</option></select><button type="button" class="mail-icon-button insert-logo-button" @mousedown.prevent="rememberSignatureSelection" @click="insertSignatureLogo"><ImagePlus :size="14" /> {{ tx('插入 Logo','Insert logo') }}</button><button type="button" class="mail-icon-button signature-layout-button" @mousedown.prevent="rememberSignatureSelection" @click="arrangeSignatureSideBySide">{{ tx('左右布局','Side-by-side') }}</button></div><div ref="signatureEditor" class="signature-design-canvas" contenteditable="true" role="textbox" aria-multiline="true" :aria-label="tx('邮件签名编辑区','Email signature editor')" @input="updateSignatureDraft" @mouseup="rememberSignatureSelection" @keyup="rememberSignatureSelection"></div></div><aside class="signature-preview-panel"><h4>{{ tx("预览","Preview") }}</h4><div class="signature-preview-canvas" v-html="sanitizeSignatureHtml(signatureHtmlDraft)"></div></aside></div><button type="submit" class="mail-primary signature-save" :disabled="busy">{{ busy ? tx('保存中…','Saving…') : tx('保存签名设计','Save signature design') }}</button></form>
     </section></div>
   </section>
 </template>
@@ -509,9 +585,9 @@ onMounted(() => void loadStatus());
 .compose-card>header h2{margin:0;color:#304451;font-size:20px}.compose-card>header button{display:grid;place-items:center;width:36px;height:36px;border:1px solid #d6e0e5;border-radius:50%;background:#fff;color:#405969;cursor:pointer}
 .compose-card>label{display:grid;gap:5px;color:#425966;font-size:12px;font-weight:650}.compose-card textarea{resize:vertical;line-height:1.5}
 .compose-card footer{position:sticky;bottom:-19px;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:4px -19px -19px;padding:12px 19px;border-top:1px solid #e5ebee;background:#fff}.compose-card footer span{color:#687b86;font-size:11px}
-.mail-settings-card{width:min(760px,96vw);gap:13px}.template-editor,.signature-editor,.signature-logo-editor{gap:10px;padding:13px;border:1px solid #d8e2e7;border-radius:9px;background:#f8fafb}.mail-settings-card h3{margin:0;font-size:15px;color:#344956}.signature-logo-editor{display:grid}.signature-logo-editor>p{margin:0;color:#647782;font-size:12px;line-height:1.5}.signature-logo-actions{display:flex;gap:8px;flex-wrap:wrap}.signature-logo-editor>.mail-help{margin:0}
+.mail-settings-card{width:min(1020px,96vw);gap:13px}.template-editor,.signature-editor,.signature-logo-editor{gap:10px;padding:13px;border:1px solid #d8e2e7;border-radius:9px;background:#f8fafb}.mail-settings-card h3{margin:0;font-size:15px;color:#344956}.signature-logo-editor{display:grid}.signature-logo-editor>p{margin:0;color:#647782;font-size:12px;line-height:1.5}.signature-logo-actions{display:flex;gap:8px;flex-wrap:wrap}.signature-logo-editor>.mail-help{margin:0}
 .signature-editor-help{margin:0;color:#647782;font-size:12px;line-height:1.5}
-.signature-design-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(210px,.8fr);gap:12px;align-items:stretch}
+.signature-design-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(240px,.8fr);gap:12px;align-items:stretch}
 .signature-editor-workspace,.signature-preview-panel{min-width:0;border:1px solid #d7e1e6;border-radius:8px;background:#fff;overflow:hidden}
 .signature-toolbar{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:7px;border-bottom:1px solid #dfe7eb;background:#f3f6f7}
 .signature-toolbar select{width:auto;min-width:72px;height:32px;min-height:32px!important;padding:3px 6px;border:1px solid #cfdae0;border-radius:5px;background:#fff;color:#40515c;font:inherit;font-size:11px}
@@ -531,6 +607,11 @@ onMounted(() => void loadStatus());
 .signature-preview-canvas :deep(img){max-width:100%;height:auto;vertical-align:middle}
 .signature-preview-canvas :deep(table){max-width:100%;border-collapse:collapse}
 .signature-preview-canvas :deep(td){vertical-align:middle}
+.signature-design-canvas table,.signature-preview-canvas :deep(table){width:100%;table-layout:fixed;border-collapse:collapse}
+.signature-design-canvas td,.signature-preview-canvas :deep(td){box-sizing:border-box;overflow-wrap:anywhere}
+.signature-design-canvas td{min-width:0}
+.signature-preview-canvas :deep(img),.signature-design-canvas img{height:auto;max-width:100%}
+.mail-workspace .signature-toolbar button.signature-layout-button{min-height:32px!important;padding:3px 9px;font-size:11px}
 .signature-save{justify-self:start}
 .template-editor>label,.signature-editor>label{font-size:12px;color:#425966}.template-editor textarea,.signature-editor textarea{min-height:92px}
 .signature-preview{max-width:260px;max-height:100px}
