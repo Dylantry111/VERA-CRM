@@ -33,7 +33,7 @@ ORDER_DATE_MIGRATION_ID = 'migration:order-date-from-deposit-v1'
 def sanitize_mail_signature(markup):
     """Keep signature formatting and inline images while dropping executable markup."""
     class SignatureParser(HTMLParser):
-        allowed = {'p', 'div', 'br', 'span', 'strong', 'b', 'em', 'i', 'u', 'font', 'a', 'img', 'ul', 'ol', 'li', 'table', 'tbody', 'tr', 'td'}
+        allowed = {'p', 'div', 'br', 'span', 'strong', 'b', 'em', 'i', 'u', 'font', 'a', 'img', 'ul', 'ol', 'li', 'h2', 'h3', 'blockquote', 'table', 'tbody', 'tr', 'td'}
         void = {'br', 'img'}
         blocked = {'script', 'style', 'iframe', 'object', 'svg', 'math'}
 
@@ -1079,12 +1079,55 @@ class MailboxMove(MailboxMessageAction):
     destination: str = Field(min_length=1, max_length=500)
 
 
+class MailboxAttachmentUploadStart(Input):
+    filename: str = Field(min_length=1, max_length=180)
+    content_type: str = Field(default='application/octet-stream', max_length=120)
+    size: int = Field(gt=0, le=10 * 1024 * 1024, strict=True)
+
+    @field_validator('filename')
+    @classmethod
+    def safe_mail_attachment_name(cls, value):
+        value = re.sub(r'[\\/\x00-\x1f\x7f]', '_', value).strip(' .')
+        if not value:
+            raise ValueError('Attachment filename is required')
+        return value
+
+    @field_validator('content_type')
+    @classmethod
+    def valid_mail_attachment_type(cls, value):
+        value = value.strip().lower()
+        if not re.fullmatch(r'[a-z0-9][a-z0-9.+-]{0,63}/[a-z0-9][a-z0-9.+-]{0,63}', value):
+            raise ValueError('Invalid attachment content type')
+        return value
+
+class MailboxAttachmentChunk(Input):
+    upload_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    index: int = Field(ge=0, le=9, strict=True)
+    data: str = Field(min_length=4, max_length=1_400_000)
+
+    @field_validator('data')
+    @classmethod
+    def valid_mail_attachment_chunk(cls, value):
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except (ValueError, base64.binascii.Error):
+            raise ValueError('Invalid attachment encoding') from None
+        if not decoded or len(decoded) > 1024 * 1024:
+            raise ValueError('Attachment upload chunk exceeds 1 MB')
+        return value
+
+
+class MailboxAttachmentRef(Input):
+    upload_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+
+
 class MailboxSend(Input):
     to: str = Field(min_length=3, max_length=2000)
     cc: str = Field(default='', max_length=2000)
     subject: str = Field(min_length=1, max_length=500)
     body: str = Field(min_length=1, max_length=100000)
     html_body: str | None = Field(default=None, max_length=1500000)
+    attachments: list[MailboxAttachmentRef] = Field(default_factory=list, max_length=10)
     reply_to: str = Field(default='', max_length=500)
     purpose: Literal['existing_notice', 'commercial_update', 'first_contact'] = 'existing_notice'
     consent_confirmed: bool = False
@@ -2397,6 +2440,63 @@ def register(app, s):
         except mailbox_service.MailboxError as exc:
             raise HTTPException(502, str(exc)) from None
 
+    @app.post('/api/operations/mailbox/attachments/start')
+    def mailbox_attachment_start(body: MailboxAttachmentUploadStart, actor=Depends(s.require_admin)):
+        upload_id = secrets.token_hex(16)
+        chunk_size = 1024 * 1024
+        record = {'upload_id': upload_id, 'filename': body.filename, 'content_type': body.content_type,
+                  'size': body.size, 'chunks': (body.size + chunk_size - 1) // chunk_size,
+                  'uploaded_by': actor, 'expires_at': time.time() + 2 * 60 * 60}
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            expired = []
+            for row in c.execute("SELECT id,data FROM operations_records WHERE kind='mail_upload_meta'").fetchall():
+                try: meta = json.loads(row['data'])
+                except (ValueError, TypeError): meta = {}
+                if float(meta.get('expires_at', 0)) <= time.time():
+                    expired.append(str(meta.get('upload_id') or '').lower())
+            for old_id in expired:
+                if re.fullmatch(r'[a-f0-9]{32}', old_id):
+                    c.execute('DELETE FROM operations_records WHERE id LIKE ?', ('mail-upload:' + old_id + ':%',))
+                c.execute('DELETE FROM operations_records WHERE id=?', ('mail-upload:' + old_id,))
+            c.execute('INSERT INTO operations_records(id,kind,customer_id,data) VALUES(?,?,?,?)',
+                      ('mail-upload:' + upload_id, 'mail_upload_meta', None, json.dumps(record)))
+        return {'upload_id': upload_id, 'chunk_size': chunk_size, 'expires_in_seconds': 7200}
+
+    @app.post('/api/operations/mailbox/attachments/chunk')
+    def mailbox_attachment_chunk(body: MailboxAttachmentChunk, actor=Depends(s.require_admin)):
+        chunk_size = 1024 * 1024
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row = c.execute('SELECT data FROM operations_records WHERE id=? AND kind=?',
+                            ('mail-upload:' + body.upload_id, 'mail_upload_meta')).fetchone()
+            if not row: raise HTTPException(404, 'Attachment upload has expired')
+            meta = json.loads(row['data'])
+            if meta.get('uploaded_by') != actor: raise HTTPException(403, 'Attachment upload is not available to this account')
+            if float(meta.get('expires_at', 0)) <= time.time(): raise HTTPException(410, 'Attachment upload has expired')
+            if body.index >= int(meta.get('chunks', 0)): raise HTTPException(422, 'Attachment chunk index is invalid')
+            expected = min(chunk_size, int(meta['size']) - body.index * chunk_size)
+            payload = base64.b64decode(body.data, validate=True)
+            if len(payload) != expected: raise HTTPException(422, 'Attachment chunk size does not match the upload')
+            c.execute('INSERT INTO operations_records(id,kind,customer_id,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
+                      ('mail-upload:' + body.upload_id + ':' + str(body.index), 'mail_upload_chunk', None,
+                       json.dumps({'data': body.data, 'uploaded_by': actor})))
+        return {'uploaded': True, 'index': body.index}
+
+    @app.delete('/api/operations/mailbox/attachments/{upload_id}')
+    def mailbox_attachment_delete(upload_id: str, actor=Depends(s.require_admin)):
+        if not re.fullmatch(r'[a-f0-9]{32}', upload_id): raise HTTPException(422, 'Invalid attachment upload id')
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row = c.execute('SELECT data FROM operations_records WHERE id=? AND kind=?',
+                            ('mail-upload:' + upload_id, 'mail_upload_meta')).fetchone()
+            if not row: return {'deleted': True}
+            meta = json.loads(row['data'])
+            if meta.get('uploaded_by') != actor: raise HTTPException(403, 'Attachment upload is not available to this account')
+            c.execute('DELETE FROM operations_records WHERE id LIKE ?', ('mail-upload:' + upload_id + ':%',))
+            c.execute('DELETE FROM operations_records WHERE id=?', ('mail-upload:' + upload_id,))
+        return {'deleted': True}
+
     @app.post('/api/operations/mailbox/send')
     def mailbox_send(body: MailboxSend, actor=Depends(s.require_admin)):
         from email_service import address
@@ -2408,11 +2508,36 @@ def register(app, s):
                 raise ValueError('Enter at least one recipient address')
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from None
+        attachments = []
         with s.db() as c:
             email_address, password = saved_mailbox(c)
+            total_size = 0
+            if len({item.upload_id for item in body.attachments}) != len(body.attachments):
+                raise HTTPException(422, 'An attachment was included more than once')
+            for item in body.attachments:
+                row = c.execute('SELECT data FROM operations_records WHERE id=? AND kind=?',
+                                ('mail-upload:' + item.upload_id, 'mail_upload_meta')).fetchone()
+                if not row: raise HTTPException(410, 'An attachment upload has expired; please send again')
+                meta = json.loads(row['data'])
+                if meta.get('uploaded_by') != actor: raise HTTPException(403, 'Attachment upload is not available to this account')
+                if float(meta.get('expires_at', 0)) <= time.time(): raise HTTPException(410, 'An attachment upload has expired; please send again')
+                content = bytearray()
+                for index in range(int(meta['chunks'])):
+                    part = c.execute('SELECT data FROM operations_records WHERE id=? AND kind=?',
+                                     ('mail-upload:' + item.upload_id + ':' + str(index), 'mail_upload_chunk')).fetchone()
+                    if not part: raise HTTPException(409, 'An attachment upload is incomplete; please send again')
+                    chunk = json.loads(part['data'])
+                    if chunk.get('uploaded_by') != actor: raise HTTPException(403, 'Attachment upload is not available to this account')
+                    content.extend(base64.b64decode(chunk['data'], validate=True))
+                if len(content) != int(meta['size']): raise HTTPException(409, 'An attachment upload is incomplete; please send again')
+                total_size += len(content)
+                if total_size > 10 * 1024 * 1024: raise HTTPException(413, 'Attachments must total 10 MB or less')
+                attachments.append((meta['filename'], meta['content_type'], bytes(content), item.upload_id))
         try:
+            html_body = sanitize_mail_signature(body.html_body) if body.html_body else None
             message_id = mailbox_service.send(email_address, password, ', '.join(recipients), body.subject.strip(),
-                                              body.body, ', '.join(carbon), body.reply_to, body.html_body)
+                                              body.body, ', '.join(carbon), body.reply_to, html_body,
+                                              [(name, mime, content) for name, mime, content, _ in attachments])
             activity_recorded = True
             try:
                 with s.db() as c:

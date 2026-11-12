@@ -312,7 +312,7 @@ def delete_message(email_address, password, folder, uid):
             pass
 
 
-def send(email_address, password, recipient, subject, body, cc='', reply_to='', html_body=None):
+def send(email_address, password, recipient, subject, body, cc='', reply_to='', html_body=None, attachments=None):
     if '\r' in subject or '\n' in subject:
         raise MailboxError('The email subject is invalid.')
     message = EmailMessage()
@@ -346,6 +346,11 @@ def send(email_address, password, recipient, subject, body, cc='', reply_to='', 
             html_part = message.get_payload()[-1]
             for payload, subtype, content_id in inline_images:
                 html_part.add_related(payload, maintype='image', subtype=subtype, cid=f'<{content_id}>', disposition='inline')
+    for filename, content_type, payload in attachments or []:
+        maintype, _, subtype = content_type.partition('/')
+        if not maintype or not subtype:
+            maintype, subtype = 'application', 'octet-stream'
+        message.add_attachment(payload, maintype=maintype, subtype=subtype, filename=filename)
     recipients = [entry.strip() for entry in re.split(r'[,;]', recipient + ',' + cc) if entry.strip()]
     try:
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20, context=ssl.create_default_context()) as client:
