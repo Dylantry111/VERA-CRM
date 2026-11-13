@@ -156,7 +156,7 @@ def build(invoice, customer, orders, payment=None):
     if rebate > 0 and not rebate_items:
         description = str(labels.get('credit_line') or 'Credit from {month}').replace('{month}', 'rebate')
         rows.append({'order': '', 'item': description, 'description': description, 'project': description, 'site': '', 'order_total': '', 'unit_price': '', 'quantity': '', 'gst_rate': gst_rate, 'amount': money(-rebate)})
-    bank = payment_lines(payment, labels, template.get('gst_number', ''), fields)
+    bank = payment_lines(payment, labels, template.get('gst_number', ''), {} if (template.get('invoice_designs') or {}).get(kind_key, {}).get('elements') is not None else fields)
     logo = ''
     try:
         logo_path = os.path.join(os.path.dirname(__file__), 'vera-logo.png')
@@ -385,24 +385,6 @@ def _invoice_subtotal(m):
 
 def _canvas_field_value(m, key):
     labels = m['labels']
-    settings = m['field_settings']
-    visibility = {
-        'company_name': settings.get('company_name', True), 'company_gst': settings.get('company_gst', True),
-        'company_address': settings.get('company_address', True), 'customer_company': settings.get('customer_company', True),
-        'customer_contact': settings.get('customer_contact', True), 'customer_address': settings.get('customer_address', True),
-        'customer_phone': settings.get('customer_phone', False), 'customer_email': settings.get('customer_email', False),
-        'customer_label': any(settings.get(name, False) for name in ('customer_company', 'customer_contact', 'customer_address', 'customer_phone', 'customer_email')),
-        'invoice_title': settings.get('invoice_title', True), 'invoice_number': settings.get('invoice_number', True),
-        'invoice_reference': settings.get('invoice_reference', True), 'invoice_date': settings.get('invoice_date', True), 'due_date': settings.get('due_date', True),
-        'order_summary': bool(settings.get('item_columns', [])),
-        'order_id': 'order_id' in settings.get('item_columns', []), 'description': 'description' in settings.get('item_columns', []),
-        'site_address': 'site_address' in settings.get('item_columns', []), 'order_total': 'order_total' in settings.get('item_columns', []),
-        'gst': 'gst' in settings.get('item_columns', []), 'amount_due': 'amount' in settings.get('item_columns', []),
-        'subtotal': settings.get('subtotal', True), 'gst_total': settings.get('gst_total', True), 'invoice_total': settings.get('invoice_total', True),
-        'payment_heading': settings.get('payment_heading', True), 'payment_details': bool(m['payment']),
-    }
-    if key in visibility and not visibility[key]:
-        return ''
     values = {
         'company_name': m['brand'], 'company_gst': f"{labels['company_gst']} {m['brand_gst']}" if m['brand_gst'] else '',
         'company_address': m['brand_address'], 'invoice_title': labels['invoice_title'],
