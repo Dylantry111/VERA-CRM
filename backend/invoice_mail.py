@@ -198,6 +198,8 @@ def build(invoice, customer, orders, payment=None):
         'payment': bank,
         'footer': template.get('footer') or (f'Please pay by bank transfer to the account above and quote {reference or number} as the reference.' if bank else footer()),
         'design': invoice_design(template, kind_key),
+        'layout_style': template.get('layout_style') or 'reference_aa0013',
+        'reference_footer': template.get('footer', ''),
         'labels': {
             'invoice_title': labels.get('invoice_title') or 'TAX INVOICE',
             'bill_to': labels.get('bill_to') or 'BILL TO',
@@ -523,6 +525,9 @@ def _html_legacy(m):
 
 
 def _html(m, a4=False):
+    if m.get('layout_style') == 'reference_aa0013':
+        from invoice_reference_layout import render_html
+        return render_html(m)
     e = escape
     accent, ink, line = '#405969', '#263640', '#dce4e8'
     labels = m['labels']
@@ -777,6 +782,9 @@ def _render_canvas_pdf(m):
 
 def render_pdf(m):
     """A4 invoice PDF rendered from the same movable elements as the HTML invoice."""
+    if m.get('layout_style') == 'reference_aa0013':
+        from invoice_reference_layout import render_pdf as reference_pdf
+        return reference_pdf(m)
     if 'elements' in (m.get('design') or {}):
         return _render_canvas_pdf(m)
     from reportlab.lib import colors

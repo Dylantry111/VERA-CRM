@@ -1151,6 +1151,7 @@ class InvoiceFieldSettings(Input):
 
 
 class InvoiceTemplate(Input):
+    layout_style: Literal['reference_aa0013', 'canvas'] = 'reference_aa0013'
     company_name: str = Field(default='VERA Shading Solutions', max_length=200)
     gst_number: str = Field(default='', max_length=80)
     company_address: str = Field(default='', max_length=500)
