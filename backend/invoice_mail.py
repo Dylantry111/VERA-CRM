@@ -7,6 +7,7 @@ import io
 import os
 import re
 import base64
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 
@@ -51,10 +52,25 @@ def invoice_reference(invoice, order_numbers):
     return ', '.join(n for n in numbers if n)
 
 
-def payment_lines(payment):
+def payment_lines(payment, labels=None, gst_number=''):
     """Label/value pairs for the bank details an administrator saved in settings; empty until something is saved."""
-    labels = (('account_name', 'Account name'), ('bank_name', 'Bank'), ('account_number', 'Account number'), ('reference_note', 'Note'))
-    return [(label, str(payment[key]).strip()) for key, label in labels if payment and str(payment.get(key) or '').strip()]
+    labels = labels or {}
+    fields = (('bank_name', labels.get('bank') or 'Bank'), ('account_name', labels.get('account_name') or 'Account Name'),
+              ('account_number', labels.get('account_number') or 'Account Number'), ('reference_note', labels.get('payment_note') or 'Note'))
+    result = [(label, str(payment[key]).strip()) for key, label in fields if payment and str(payment.get(key) or '').strip()]
+    if gst_number:
+        result.append((labels.get('payment_gst') or 'GST', gst_number))
+    return result
+
+
+def invoice_date(value):
+    """Format stored ISO dates as the day-first New Zealand invoice format."""
+    raw = str(value or '')[:10]
+    try:
+        parsed = date.fromisoformat(raw)
+        return f'{parsed.day}/{parsed.month}/{parsed.year}'
+    except ValueError:
+        return raw or '—'
 
 
 def gst_included(amount, rate):
@@ -74,22 +90,32 @@ def build(invoice, customer, orders, payment=None):
     template = invoice.get('template') or {}
     kind_key = kind if kind in ('deposit', 'balance') else 'manual'
     currency = invoice.get('currency', 'NZD')
+    labels = template.get('invoice_labels') or {}
+    columns = template.get('invoice_columns') or {}
+    rate = invoice.get('tax_rate') or next((o['tax_rate'] for o in orders.values() if o.get('tax_rate')), '0.15')
+    gst_rate = f"{Decimal(str(rate)) * 100:.0f}%"
     rows = []
     for line in invoice.get('lines', []):
         amount = Decimal(line['amount'])
         if line.get('description') and not line.get('order_id'):
-            rows.append({'order': '', 'project': line['description'], 'site': '', 'order_total': '', 'amount': money(amount)})
+            rows.append({'order': '', 'item': line['description'], 'project': line['description'], 'site': '', 'order_total': '', 'unit_price': '', 'quantity': '', 'gst_rate': gst_rate, 'amount': money(amount)})
             continue
         if manual:
-            rows.append({'order': '', 'project': line.get('description', ''), 'site': '', 'order_total': '', 'amount': money(amount)})
+            rows.append({'order': '', 'item': line.get('description', ''), 'project': line.get('description', ''), 'site': '', 'order_total': '', 'unit_price': '', 'quantity': '', 'gst_rate': gst_rate, 'amount': money(amount)})
             continue
         order = orders.get(line['order_id'], {})
         total = Decimal(order['total']) if order.get('total') not in (None, '') else None
+        order_number = order.get('order_number') or line['order_id']
+        row_title = 'Deposit for Order' if deposit else 'Balance for Order'
         rows.append({
-            'order': order.get('order_number') or line['order_id'],
+            'order': order_number,
+            'item': f'{row_title} {order_number}',
             'project': order.get('project_name', ''),
             'site': order.get('site_address', ''),
             'order_total': money(total) if total is not None else '',
+            'unit_price': '',
+            'quantity': '',
+            'gst_rate': gst_rate,
             'amount': money(amount),
         })
     due = Decimal(invoice['amount'])
@@ -99,8 +125,21 @@ def build(invoice, customer, orders, payment=None):
         {'label': f"Monthly rebate · {item['month']}" if item.get('month') else 'Rebate credit', 'amount': money(Decimal(item['amount']))}
         for item in invoice.get('rebate_allocations', []) if Decimal(str(item.get('amount', '0'))) > 0
     ]
-    rate = invoice.get('tax_rate') or next((o['tax_rate'] for o in orders.values() if o.get('tax_rate')), '0.15')
-    bank = payment_lines(payment)
+    for item in invoice.get('rebate_allocations', []):
+        amount = Decimal(str(item.get('amount', '0')))
+        if amount <= 0:
+            continue
+        month = str(item.get('month') or '')
+        try:
+            month = date.fromisoformat(month + '-01').strftime('%B %Y') if month else ''
+        except ValueError:
+            pass
+        description = str(labels.get('credit_line') or 'Credit from {month}').replace('{month}', month or 'rebate')
+        rows.append({'order': '', 'item': description, 'project': description, 'site': '', 'order_total': '', 'unit_price': '', 'quantity': '', 'gst_rate': gst_rate, 'amount': money(-amount)})
+    if rebate > 0 and not rebate_items:
+        description = str(labels.get('credit_line') or 'Credit from {month}').replace('{month}', 'rebate')
+        rows.append({'order': '', 'item': description, 'project': description, 'site': '', 'order_total': '', 'unit_price': '', 'quantity': '', 'gst_rate': gst_rate, 'amount': money(-rebate)})
+    bank = payment_lines(payment, labels, template.get('gst_number', ''))
     logo = ''
     try:
         logo_path = os.path.join(os.path.dirname(__file__), 'vera-logo.png')
@@ -116,6 +155,8 @@ def build(invoice, customer, orders, payment=None):
         'is_deposit': deposit,
         'date': str(invoice.get('created_at', ''))[:10],
         'due_date': str(invoice.get('due_date') or '—')[:10],
+        'formatted_date': invoice_date(invoice.get('created_at')),
+        'formatted_due_date': invoice_date(invoice.get('due_date')),
         'currency': currency,
         'tax_basis': str(invoice.get('tax_basis', '')).replace('_', ' '),
         'company': customer.get('company', ''),
@@ -138,6 +179,28 @@ def build(invoice, customer, orders, payment=None):
         'payment': bank,
         'footer': template.get('footer') or (f'Please pay by bank transfer to the account above and quote {reference or number} as the reference.' if bank else footer()),
         'design': invoice_design(template, kind_key),
+        'labels': {
+            'invoice_title': labels.get('invoice_title') or 'TAX INVOICE',
+            'bill_to': labels.get('bill_to') or 'BILL TO',
+            'invoice_number': labels.get('invoice_number') or 'Invoice No.',
+            'invoice_date': labels.get('invoice_date') or 'Invoice Date',
+            'due_date': labels.get('due_date') or 'Due Date',
+            'item': labels.get('item') or 'Item',
+            'unit_price': labels.get('unit_price') or 'Unit Price',
+            'quantity': labels.get('quantity') or 'Quantity',
+            'gst': labels.get('gst') or 'GST',
+            'total': labels.get('total') or 'Total',
+            'subtotal': labels.get('subtotal') or 'Subtotal',
+            'gst_included': labels.get('gst_included') or 'incl. GST',
+            'payment_instruction': labels.get('payment_instruction') or 'Payment Instruction',
+            'bank': labels.get('bank') or 'Bank',
+            'account_name': labels.get('account_name') or 'Account Name',
+            'account_number': labels.get('account_number') or 'Account Number',
+            'payment_gst': labels.get('payment_gst') or 'GST',
+            'payment_note': labels.get('payment_note') or 'Note',
+            'credit_line': labels.get('credit_line') or 'Credit from {month}',
+        },
+        'columns': {'unit_price': columns.get('unit_price', True), 'quantity': columns.get('quantity', True), 'gst': columns.get('gst', True)},
     }
     model['subject'] = f"VERA invoice {number}"
     model['text'] = _text(model)
@@ -231,9 +294,38 @@ def _cells(m, r):
     return [r['amount']]
 
 
+def _invoice_table_columns(m):
+    labels, visible = m['labels'], m['columns']
+    columns = []
+    if visible.get('unit_price', True):
+        columns.append(('unit_price', labels['unit_price']))
+    if visible.get('quantity', True):
+        columns.append(('quantity', labels['quantity']))
+    if visible.get('gst', True):
+        columns.append(('gst_rate', labels['gst']))
+    columns.append(('amount', labels['total']))
+    return columns
+
+
+def _invoice_table_cells(m, row):
+    return [(key, row.get(key, '')) for key, _ in _invoice_table_columns(m)]
+
+
+def _invoice_amount(m, value):
+    amount = Decimal(str(value or '0').replace(',', ''))
+    sign = '-' if amount < 0 else ''
+    return f"{sign}{m['currency']} {money(abs(amount))}"
+
+
+def _invoice_subtotal(m):
+    return money(Decimal(str(m['due'])) - Decimal(str(m['gst'])))
+
+
 def _text(m):
-    lines = [m.get('brand') or BRAND, f"{m['kind']} {m['number']}"] + ([f"Reference: {m['reference']}"] if m['reference'] else []) + [f"Date: {m['date']}", '',
-             f"Bill to: {m['company']}" + (f" ({m['contact']})" if m['contact'] else '')]
+    labels = m['labels']
+    lines = [m.get('brand') or BRAND, labels['invoice_title'], f"{labels['invoice_number']} {m['number']}",
+             f"{labels['invoice_date']}: {m['formatted_date']}", f"{labels['due_date']}: {m['formatted_due_date']}", '',
+             f"{labels['bill_to']}: {m['company']}" + (f" ({m['contact']})" if m['contact'] else '')]
     if m['address']:
         lines.append(m['address'])
     if m.get('brand_gst'):
@@ -241,23 +333,17 @@ def _text(m):
     if m.get('brand_address'):
         lines.append(m['brand_address'])
     lines.append('')
-    labels = _columns(m)
     for r in m['rows']:
-        lines.append(f"{r['order']}  {r['project']}".strip())
-        for label, value in zip(labels, _cells(m, r)):
+        lines.append(r['item'])
+        for key, label in _invoice_table_columns(m):
+            value = r.get(key, '')
             if value:
-                lines.append(f"    {label}: {m['currency']} {value}")
+                lines.append(f"    {label}: {_invoice_amount(m, value) if key == 'amount' else value}")
     lines.append('')
-    if m['rebate']:
-        lines.append(f"Subtotal: {m['currency']} {m['gross']}")
-        if m['rebate_items']:
-            lines += [f"{item['label']}: -{m['currency']} {item['amount']}" for item in m['rebate_items']]
-        else:
-            lines.append(f"Rebate applied: -{m['currency']} {m['rebate']}")
-    lines += [f"Includes GST ({m['gst_rate']}): {m['currency']} {m['gst']}", f"Amount due (incl. GST): {m['currency']} {m['due']}", m['basis'], '']
-    if m.get('due_date') and m['due_date'] != '—': lines.insert(3, f"Due date: {m['due_date']}")
+    lines += [f"{labels['subtotal']}: {m['currency']} {_invoice_subtotal(m)}", f"{labels['gst_included']} ({m['gst_rate']}): {m['currency']} {m['gst']}",
+              f"{labels['total']}: {m['currency']} {m['due']}", m['basis'], '']
     if m['payment']:
-        lines += ['Payment details'] + [f"    {label}: {value}" for label, value in m['payment']] + ['']
+        lines += [labels['payment_instruction']] + [f"    {label}: {value}" for label, value in m['payment']] + ['']
     lines += [m['footer'], 'The PDF invoice is attached.']
     return '\n'.join(lines)
 
@@ -312,20 +398,15 @@ def _html_legacy(m):
 def _html(m, a4=False):
     e = escape
     accent, ink, line = '#405969', '#263640', '#dce4e8'
-    labels = _columns(m)
-    headings = ''.join(f'<td align="right" style="padding:8px 0 8px 12px;border-bottom:2px solid {ink};font-size:11px;color:#64766b">{e(label)}</td>' for label in labels)
+    labels = m['labels']
+    columns = _invoice_table_columns(m)
+    headings = ''.join(f'<td align="right" style="padding:8px 0 8px 12px;border-bottom:2px solid {ink};font-size:11px;color:#64766b">{e(label)}</td>' for _, label in columns)
     rows = ''
     for row in m['rows']:
-        values = ''.join(f'<td align="right" style="padding:10px 0 10px 12px;border-bottom:1px solid {line};white-space:nowrap">{e(m["currency"])} {value}</td>' if value else '<td></td>' for value in _cells(m, row))
-        name = row['order'] or row['project']
-        detail = f'<br><span style="font-size:12px;color:#64766b">{e(row["project"] + (" · " + row["site"] if row["site"] else ""))}</span>' if row['order'] else ''
-        rows += f'<tr><td style="padding:10px 0;border-bottom:1px solid {line}"><strong>{e(name)}</strong>{detail}</td>{values}</tr>'
-    rebate_rows = ''
-    if m['rebate']:
-        rebate_rows = f'<tr><td colspan="{len(labels)}">Subtotal</td><td align="right">{e(m["currency"])} {m["gross"]}</td></tr>'
-        rebate_rows += ''.join(f'<tr><td colspan="{len(labels)}">{e(item["label"])}</td><td align="right">−{e(m["currency"])} {item["amount"]}</td></tr>' for item in m['rebate_items']) if m['rebate_items'] else f'<tr><td colspan="{len(labels)}">Rebate applied</td><td align="right">−{e(m["currency"])} {m["rebate"]}</td></tr>'
+        values = ''.join(f'<td align="right" style="padding:10px 0 10px 12px;border-bottom:1px solid {line};white-space:nowrap">{e(_invoice_amount(m,row.get(key)))}</td>' if key == 'amount' and row.get(key) else f'<td align="right" style="padding:10px 0 10px 12px;border-bottom:1px solid {line};white-space:nowrap">{e(str(row.get(key,"—")))}</td>' for key, _ in columns)
+        rows += f'<tr><td style="padding:10px 0;border-bottom:1px solid {line}">{e(row["item"])}</td>{values}</tr>'
     design = (m.get('design') or {}).get('blocks') or invoice_design({}, 'deposit')['blocks']
-    payment = '<div style="padding:12px;border:1px solid ' + line + ';border-radius:7px"><b>PAYMENT DETAILS</b>' + ''.join(f'<div>{e(label)}: <strong>{e(value)}</strong></div>' for label, value in m['payment']) + '</div>' if m['payment'] else ''
+    payment = '<div style="padding:12px;border:1px solid ' + line + ';border-radius:7px"><b>' + e(labels['payment_instruction']) + '</b>' + ''.join(f'<div>{e(label)}: <strong>{e(value)}</strong></div>' for label, value in m['payment']) + '</div>' if m['payment'] else ''
     sections = []
     area_sections = {area: [] for area in _LAYOUT_AREAS}
     for block in design:
@@ -343,17 +424,17 @@ def _html(m, a4=False):
             sections.append(value); area_sections[area].append(value)
         elif bid == 'heading':
             reference = f'<div>Reference: {e(m["reference"])}</div>' if m['reference'] else ''
-            value = f'<div style="text-align:{align};padding:10px 0;border-bottom:1px solid {line};margin-bottom:14px"><strong style="font-size:23px;color:{accent}">{e(m["kind"])}</strong><div>{e(m["number"])}</div>{reference}<small>Invoice date: {e(m["date"])} · Due: {e(m["due_date"])}</small></div>'
+            value = f'<div style="text-align:{align};padding:10px 0;border-bottom:1px solid {line};margin-bottom:14px"><strong style="font-size:23px;color:{accent}">{e(labels["invoice_title"])}</strong><div>{e(labels["invoice_number"])} {e(m["number"])}</div>{reference}<small>{e(labels["invoice_date"])}: {e(m["formatted_date"])} · {e(labels["due_date"])}: {e(m["formatted_due_date"])}</small></div>'
             sections.append(value); area_sections[area].append(value)
         elif bid == 'bill_to':
-            value = f'<small>BILL TO</small><br><strong>{e(m["company"])}</strong>' + ('<br>' + e(m['contact']) if m['contact'] else '') + ('<br>' + e(m['address']) if m['address'] else '')
+            value = f'<small>{e(labels["bill_to"])}</small><br><strong>{e(m["company"])}</strong>' + ('<br>' + e(m['contact']) if m['contact'] else '') + ('<br>' + e(m['address']) if m['address'] else '')
             value = f'<div style="text-align:{align};padding:12px;background:#f5f7f8;border-radius:7px;margin-bottom:14px">{value}</div>'
             sections.append(value); area_sections[area].append(value)
         elif bid == 'order_lines':
-            value = f'<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px"><tr><td style="border-bottom:2px solid {ink};padding:8px 0">ORDER / DESCRIPTION</td>{headings}</tr>{rows}{rebate_rows}</table>'
+            value = f'<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:14px"><tr><td style="border-bottom:2px solid {ink};padding:8px 0">{e(labels["item"])}</td>{headings}</tr>{rows}</table>'
             sections.append(value); area_sections[area].append(value)
         elif bid == 'totals':
-            value = f'<div style="text-align:{align};padding:12px;background:#edf2f4;border-radius:7px;margin-bottom:14px"><div>Includes GST ({e(m["gst_rate"])}): {e(m["currency"])} {e(m["gst"])}</div><strong style="font-size:21px;color:{accent}">Total due (incl. GST): {e(m["currency"])} {e(m["due"])}</strong></div>'
+            value = f'<div style="text-align:{align};padding:12px;background:#edf2f4;border-radius:7px;margin-bottom:14px"><div>{e(labels["subtotal"])}: {e(m["currency"])} {_invoice_subtotal(m)}</div><div>{e(labels["gst_included"])} ({e(m["gst_rate"])}): {e(m["currency"])} {e(m["gst"])}</div><strong style="font-size:21px;color:{accent}">{e(labels["total"])}: {e(m["currency"])} {e(m["due"])}</strong></div>'
             sections.append(value); area_sections[area].append(value)
         elif bid == 'payment' and payment:
             value = f'<div style="text-align:{align};margin-bottom:14px">{payment}</div>'
@@ -493,6 +574,7 @@ def render_pdf(m):
     accent = colors.HexColor('#405969')
     ink = colors.HexColor('#263640')
     muted = colors.HexColor('#64766b')
+    labels = m['labels']
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm, bottomMargin=18 * mm, title=f"{m['kind']} {m['number']}", author=BRAND)
     width = A4[0] - 36 * mm
@@ -515,12 +597,12 @@ def render_pdf(m):
                 details.append(para(m['brand_address'], 8, color='#64766b', align=align))
             out += details + [Spacer(1, 3 * mm)]
         elif bid == 'heading':
-            out += [para(m['kind'], 21, True, '#405969', align), para(m['number'], 10, align=align)]
+            out += [para(labels['invoice_title'], 21, True, '#405969', align), para(f"{labels['invoice_number']} {m['number']}", 10, align=align)]
             if m['reference']:
                 out.append(para('Reference: ' + m['reference'], 9, align=align))
-            out += [para(f"Invoice date: {m['date']}    Due date: {m['due_date']}", 8, color='#64766b', align=align), Spacer(1, 4 * mm)]
+            out += [para(f"{labels['invoice_date']}: {m['formatted_date']}    {labels['due_date']}: {m['formatted_due_date']}", 8, color='#64766b', align=align), Spacer(1, 4 * mm)]
         elif bid == 'bill_to':
-            out.append(para('BILL TO', 8, True, '#64766b'))
+            out.append(para(labels['bill_to'], 8, True, '#64766b'))
             out.append(para(m['company'], 11, True))
             if m['contact']:
                 out.append(para(m['contact'], 8, color='#64766b'))
@@ -528,27 +610,28 @@ def render_pdf(m):
                 out.append(para(m['address'], 8, color='#64766b'))
             out.append(Spacer(1, 5 * mm))
         elif bid == 'order_lines':
-            labels = _columns(m)
-            amount_w = 27 * mm
-            widths = [25 * mm, width - 25 * mm - amount_w * len(labels)] + [amount_w] * len(labels)
-            data = [[para('ORDER', 8, color='#64766b'), para('PROJECT / DESCRIPTION', 8, color='#64766b')] + [para(label.upper(), 8, color='#64766b', align='right') for label in labels]]
+            columns = _invoice_table_columns(m)
+            item_width = max(60 * mm, width - 26 * mm * len(columns))
+            widths = [item_width] + [(width - item_width) / len(columns)] * len(columns)
+            data = [[para(labels['item'], 8, True, muted)] + [para(label, 8, True, muted, 'right') for _, label in columns]]
             for row in m['rows']:
-                project = row['project'] + (f" - {row['site']}" if row['site'] else '')
-                data.append([para(row['order'], 9), para(project, 9)] + [para(f"{m['currency']} {value}" if value else '', 9, align='right') for value in _cells(m, row)])
+                cells = [para(row['item'], 9)]
+                for key, _ in columns:
+                    value = row.get(key, '')
+                    text = _invoice_amount(m, value) if key == 'amount' and value else str(value or '—')
+                    cells.append(para(text, 9, align='right'))
+                data.append(cells)
             table = Table(data, colWidths=widths, repeatRows=1)
             table.setStyle(TableStyle([('LINEBELOW',(0,0),(-1,0),1,ink),('LINEBELOW',(0,1),(-1,-1),.4,colors.HexColor('#dce4e8')),('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
             out += [table, Spacer(1, 4 * mm)]
         elif bid == 'totals':
             totals = []
-            if m['rebate']:
-                totals.append([para('Subtotal incl. GST', 9), para(f"{m['currency']} {m['gross']}", 9, align='right')])
-                totals += [[para(item['label'], 9), para(f"−{m['currency']} {item['amount']}", 9, align='right')] for item in m['rebate_items']] if m['rebate_items'] else [[para('Rebate applied', 9), para(f"−{m['currency']} {m['rebate']}", 9, align='right')]]
-            totals += [[para(f"Includes GST ({m['gst_rate']})", 8, color='#64766b'), para(f"{m['currency']} {m['gst']}", 8, color='#64766b', align='right')], [para('Total due (incl. GST)', 11, True, '#405969'), para(f"{m['currency']} {m['due']}", 14, True, '#405969', 'right')]]
+            totals += [[para(labels['subtotal'], 9), para(f"{m['currency']} {_invoice_subtotal(m)}", 9, align='right')], [para(f"{labels['gst_included']} ({m['gst_rate']})", 8, color='#64766b'), para(f"{m['currency']} {m['gst']}", 8, color='#64766b', align='right')], [para(labels['total'], 11, True, '#405969'), para(f"{m['currency']} {m['due']}", 14, True, '#405969', 'right')]]
             table = Table(totals, colWidths=[(width / 2) * .65, (width / 2) * .35])
             table.setStyle(TableStyle([('LINEABOVE',(0,-2),(-1,-2),1,accent),('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
             out += [table, Spacer(1, 4 * mm)]
         elif bid == 'payment' and m['payment']:
-            out.append(para('PAYMENT DETAILS', 8, True, '#64766b', align))
+            out.append(para(labels['payment_instruction'], 8, True, '#64766b', align))
             out += [para(f'{label}: {value}', 9, align=align) for label, value in m['payment']]
             out.append(Spacer(1, 4 * mm))
         elif bid == 'notes':

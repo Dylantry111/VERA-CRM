@@ -1059,6 +1059,34 @@ class InvoiceDesign(Input):
     blocks: list[InvoiceDesignBlock] = Field(default_factory=list, max_length=9)
 
 
+class InvoiceLabels(Input):
+    invoice_title: str = Field(default='TAX INVOICE', max_length=80)
+    bill_to: str = Field(default='BILL TO', max_length=80)
+    invoice_number: str = Field(default='Invoice No.', max_length=80)
+    invoice_date: str = Field(default='Invoice Date', max_length=80)
+    due_date: str = Field(default='Due Date', max_length=80)
+    item: str = Field(default='Item', max_length=80)
+    unit_price: str = Field(default='Unit Price', max_length=80)
+    quantity: str = Field(default='Quantity', max_length=80)
+    gst: str = Field(default='GST', max_length=80)
+    total: str = Field(default='Total', max_length=80)
+    subtotal: str = Field(default='Subtotal', max_length=80)
+    gst_included: str = Field(default='incl. GST', max_length=80)
+    payment_instruction: str = Field(default='Payment Instruction', max_length=100)
+    bank: str = Field(default='Bank', max_length=80)
+    account_name: str = Field(default='Account Name', max_length=80)
+    account_number: str = Field(default='Account Number', max_length=80)
+    payment_gst: str = Field(default='GST', max_length=80)
+    payment_note: str = Field(default='Note', max_length=80)
+    credit_line: str = Field(default='Credit from {month}', max_length=120)
+
+
+class InvoiceColumns(Input):
+    unit_price: bool = True
+    quantity: bool = True
+    gst: bool = True
+
+
 class InvoiceTemplate(Input):
     company_name: str = Field(default='VERA Shading Solutions', max_length=200)
     gst_number: str = Field(default='', max_length=80)
@@ -1066,6 +1094,8 @@ class InvoiceTemplate(Input):
     footer: str = Field(default='', max_length=1000)
     deposit_note: str = Field(default='Deposit of 60% of the order total. Amounts include GST.', max_length=500)
     balance_note: str = Field(default='Balance of each order after the deposit already paid. Amounts include GST.', max_length=500)
+    invoice_labels: InvoiceLabels = Field(default_factory=InvoiceLabels)
+    invoice_columns: InvoiceColumns = Field(default_factory=InvoiceColumns)
     invoice_designs: dict[Literal['deposit', 'balance', 'manual'], InvoiceDesign] = Field(default_factory=dict)
 
     @field_validator('invoice_designs')
