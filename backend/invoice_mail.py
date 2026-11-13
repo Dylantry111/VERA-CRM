@@ -318,7 +318,7 @@ def _invoice_amount(m, value):
 
 
 def _invoice_subtotal(m):
-    return money(Decimal(str(m['due'])) - Decimal(str(m['gst'])))
+    return money(Decimal(str(m['due']).replace(',', '')) - Decimal(str(m['gst']).replace(',', '')))
 
 
 def _text(m):
