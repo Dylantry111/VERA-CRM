@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 WEBSITE_IMAGES = json.loads((Path(__file__).parent / "website_products.json").read_text(encoding="utf-8"))
 
 import invoice_mail
+import invoice_numbering
 from invoice_dates import invoice_due_date
 from addons import sync_opening_style
 from fastapi import Depends, HTTPException
@@ -572,14 +573,12 @@ def backfill_order_numbers(c):
 
 
 def number_invoice(c, d, *, new=True):
-    """Give an invoice the next running number. Call inside BEGIN IMMEDIATE so two invoices never share one."""
+    """Prepare a draft without consuming a formal invoice number."""
     if new:
         d['due_date'] = invoice_due_date(d['created_at'])
-    rows = c.execute("SELECT data FROM operations_records WHERE kind='invoice'").fetchall()
-    sequence = max((int(json.loads(r['data']).get('sequence') or 0) for r in rows), default=0) + 1
-    d['sequence'] = sequence
-    d['invoice_number'] = d['fixed_number'] = invoice_mail.format_invoice_number(sequence)
-    return d
+    if d.get('payment_status') == 'received':
+        return invoice_numbering.reserve(c, d)
+    return invoice_numbering.prepare_draft(c, d)
 
 
 def backfill_invoice_numbers(c):
@@ -590,7 +589,7 @@ def backfill_invoice_numbers(c):
     pending = sorted((d for d in (json.loads(r['data']) for r in rows) if not d.get('sequence')), key=lambda d: (d.get('created_at', ''), d['id']))
     for d in pending:
         d['legacy_number'] = invoice_mail.invoice_number(d, projects)
-        number_invoice(c, d, new=False)
+        invoice_numbering.reserve(c, d)
         c.execute('UPDATE operations_records SET data=? WHERE id=?', (json.dumps(d, ensure_ascii=False), d['id']))
     return [(d['legacy_number'], d['invoice_number']) for d in pending]
 
@@ -644,6 +643,8 @@ def migrate(c):
     # The formal order date begins when the deposit is actually received. Keep
     # created_at as the submission/audit timestamp; drafts stay undated.
     backfill_order_dates(c)
+    from database import BACKEND
+    invoice_numbering.migrate(c, BACKEND)
 
 
 class Input(BaseModel):
@@ -1367,6 +1368,30 @@ def allocate_share(total, weights, amounts):
 
 
 def register(app, s):
+    # Production disables full AUTO_INIT. Run only this versioned invoice
+    # migration before the first invoice/portal request in each worker.
+    import threading
+    numbering_ready = s.BACKEND == 'sqlite'
+    numbering_lock = threading.Lock()
+
+    def ensure_numbering():
+        nonlocal numbering_ready
+        if numbering_ready:
+            return
+        with numbering_lock:
+            if not numbering_ready:
+                with s.db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    invoice_numbering.migrate(c, s.BACKEND)
+                numbering_ready = True
+
+    @app.middleware('http')
+    async def numbering_guard(request, call_next):
+        if not numbering_ready and request.url.path.startswith(('/api/operations', '/api/portal', '/api/health')):
+            from starlette.concurrency import run_in_threadpool
+            await run_in_threadpool(ensure_numbering)
+        return await call_next(request)
+
     def money(v):
         return str(Decimal(v).quantize(Decimal('.01'), rounding=ROUND_HALF_UP))
 
@@ -1439,6 +1464,10 @@ def register(app, s):
             raise HTTPException(404, 'Record not found')
         return json.loads(row['data'])
 
+    def deposit_for(c, order_id):
+        order = get(c, order_id, 'project')
+        return get(c, order.get('deposit_invoice_id') or 'deposit:' + order_id, 'invoice')
+
     def records(c, kind, cid=None):
         rows = c.execute('SELECT * FROM operations_records WHERE kind=?', (kind,)).fetchall()
         out = [json.loads(r['data']) for r in rows if cid is None or r['customer_id'] == cid]
@@ -1462,6 +1491,8 @@ def register(app, s):
         return invoice_mail.build(email_invoice, profile(c, inv['customer_id']), orders, inv.get('payment_details') or payment_view(payment_details(c)))
 
     def put(c, kind, d, cid=None):
+        if kind == 'invoice' and (d.get('fixed_number') or d.get('payment_status') in ('received', 'paid')):
+            invoice_numbering.reserve(c, d, d.get('received_by') or d.get('actor') or 'system')
         c.execute('INSERT INTO operations_records(id,kind,customer_id,data) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
                   (d['id'], kind, cid, s.dump(d)))
 
@@ -1722,6 +1753,12 @@ def register(app, s):
                 save(c,d)
                 return d
             attachments = []
+            if d.get('invoice_id'):
+                invoice = get(c, d['invoice_id'], 'invoice')
+                if invoice.get('status') in ('void', 'deleted'):
+                    d['status'] = 'cancelled'
+                    save(c, d)
+                    return d
             if d.get('invoice_id'):
                 try:
                     model = invoice_email(c, d['invoice_id'])
@@ -3587,7 +3624,7 @@ def register(app, s):
                         raise HTTPException(409, 'A settled order cannot be changed back to deposit received')
                     if orders[oid].get('status') == 'pending_review':
                         raise HTTPException(409, 'Accept technical review before confirming a deposit')
-                    deposit_invoice = get(c, 'deposit:' + oid, 'invoice')
+                    deposit_invoice = deposit_for(c, oid)
                     received_at = deposit_invoice.get('received_at') or s.now()
                     deposit_invoice.update(payment_status='received', received_at=received_at, received_by=actor)
                     orders[oid]['deposit_paid_at'] = received_at
@@ -3659,7 +3696,12 @@ def register(app, s):
             d['accepted_at'] = s.now()
             d.setdefault('lead_time', lead_time_for(d['lines']))
             event(d, 'review_accepted', actor)
-            inv = {'id': 'deposit:'+oid, 'customer_id': d['customer_id'], 'kind': 'deposit', 'order_ids': [oid],
+            deposit_id = d.get('deposit_invoice_id') or 'deposit:' + oid
+            prior = c.execute('SELECT data FROM operations_records WHERE id=?', (deposit_id,)).fetchone()
+            if prior and json.loads(prior['data']).get('status') in ('void', 'deleted'):
+                deposit_id = 'deposit:' + oid + ':' + secrets.token_hex(8)
+            d['deposit_invoice_id'] = deposit_id
+            inv = {'id': deposit_id, 'customer_id': d['customer_id'], 'kind': 'deposit', 'order_ids': [oid],
                    'amount': d.get('deposit') or deposit_amount(d['total']), 'currency': d['currency'], 'tax_basis': d['tax_basis'],
                    'tax_rate': d.get('tax_rate', '0.15'),
                    'deposit_rate': str(d.get('deposit_rate') or DEPOSIT_RATE), 'rounding': 'ROUND_UP_2DP',
@@ -3702,7 +3744,10 @@ def register(app, s):
                 received_at = s.now()
                 start_lead_time(d, received_at)
                 event(d, 'deposit_received', actor, eta=d.get('eta'))
-                inv=get(c,'deposit:'+oid,'invoice')
+                inv=deposit_for(c, oid)
+                if inv.get('status') in ('void', 'deleted'):
+                    raise HTTPException(409, 'The deposit invoice is void')
+                invoice_numbering.reserve(c, inv, actor)
                 inv.update(payment_status='received',received_at=received_at,received_by=actor)
                 put(c,'invoice',inv,d['customer_id'])
                 put(c, 'project', d, d['customer_id'])
@@ -3871,6 +3916,96 @@ def register(app, s):
         with s.db() as c:
             return records(c, 'invoice')
 
+    @app.get('/api/operations/invoices/numbering-audit')
+    def invoice_numbering_audit(actor=Depends(s.require_admin)):
+        with s.db() as c:
+            return c.execute('SELECT invoice_id,previous_number,new_number,reason,created_at FROM invoice_number_audit ORDER BY new_number').fetchall()
+
+    @app.get('/api/operations/invoices/lookup')
+    def lookup_invoice(reference: str, actor=Depends(s.auth)):
+        with s.db() as c:
+            number = reference.strip().upper()
+            matches = {row['invoice_id'] for row in c.execute('SELECT invoice_id FROM invoice_number_registry WHERE invoice_number=?', (number,)).fetchall()}
+            matches.update(row['invoice_id'] for row in c.execute('SELECT invoice_id FROM invoice_number_audit WHERE previous_number=?', (number,)).fetchall())
+            if len(matches) > 1:
+                raise HTTPException(409, 'This historical reference belongs to several invoices. Confirm the customer and amount before allocating payment.')
+            if not matches:
+                raise HTTPException(404, 'Invoice reference not found')
+            invoice = get(c, matches.pop(), 'invoice')
+            if invoice.get('status') in ('void', 'deleted'):
+                raise HTTPException(409, 'This invoice has been voided')
+            return invoice
+
+    @app.post('/api/operations/invoices/{iid}/issue')
+    def issue_invoice(iid: str, actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            invoice = get(c, iid, 'invoice')
+            if invoice.get('status') in ('void', 'deleted'):
+                raise HTTPException(409, 'A cancelled invoice cannot be issued')
+            invoice_numbering.reserve(c, invoice, actor)
+            if invoice.get('status') == 'draft':
+                invoice['status'] = 'issued'
+            put(c, 'invoice', invoice, invoice['customer_id'])
+            return invoice
+
+    def release_invoice_links(c, invoice, actor):
+        for allocation in invoice.get('rebate_allocations', []):
+            rebate = get(c, allocation['rebate_id'], 'rebate')
+            entries = [entry for entry in rebate.get('allocations', []) if entry.get('invoice_id') == invoice['id']]
+            returned = sum((Decimal(entry['amount']) for entry in entries), Decimal(0))
+            rebate['allocations'] = [entry for entry in rebate.get('allocations', []) if entry.get('invoice_id') != invoice['id']]
+            rebate['used'] = money(Decimal(rebate.get('used', '0')) - returned)
+            rebate['remaining'] = money(Decimal(rebate.get('remaining', '0')) + returned)
+            put(c, 'rebate', rebate, rebate['customer_id'])
+        for oid in invoice.get('order_ids', []):
+            order = get(c, oid, 'project')
+            if order.get('balance_invoice_id') == invoice['id']:
+                order.pop('balance_invoice_id', None)
+            if invoice['kind'] == 'deposit':
+                if order['payment_status'] != 'deposit_unpaid' or order['status'] not in ('accepted', 'pending_review'):
+                    raise HTTPException(409, 'This deposit invoice is already part of order fulfilment and cannot be cancelled')
+                order['status'] = 'pending_review'
+                order.pop('accepted_at', None)
+            event(order, 'invoice_cancelled', actor, invoice_id=invoice['id'])
+            put(c, 'project', order, order['customer_id'])
+
+    @app.post('/api/operations/invoices/{iid}/void')
+    def void_invoice(iid: str, body: Receipt, actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            invoice = get(c, iid, 'invoice')
+            if invoice.get('status') == 'void':
+                return invoice
+            if invoice.get('payment_status') in ('received', 'paid'):
+                raise HTTPException(409, 'A paid invoice needs a separate credit or payment adjustment')
+            if not invoice.get('fixed_number'):
+                raise HTTPException(409, 'Delete this unissued draft instead')
+            if invoice.get('notification_id'):
+                notification = get(c, invoice['notification_id'], 'notification')
+                if notification.get('status') == 'sending':
+                    raise HTTPException(409, 'Delivery is in progress. Check its result before voiding.')
+            release_invoice_links(c, invoice, actor)
+            invoice.update(status='void', voided_at=s.now(), voided_by=actor, void_reason=body.note)
+            put(c, 'invoice', invoice, invoice['customer_id'])
+            return invoice
+
+    @app.post('/api/operations/invoices/{iid}/delete-draft')
+    def delete_invoice_draft(iid: str, body: Receipt, actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            deleted = c.execute("SELECT 1 FROM operations_records WHERE id=? AND kind='deleted_invoice'", (iid,)).fetchone()
+            if deleted:
+                return {'id': iid, 'status': 'deleted'}
+            invoice = get(c, iid, 'invoice')
+            if invoice.get('fixed_number') or invoice.get('notification_id') or invoice.get('payment_status') in ('received', 'paid'):
+                raise HTTPException(409, 'Only unissued, unpaid drafts may be deleted')
+            release_invoice_links(c, invoice, actor)
+            invoice.update(status='deleted', deleted_at=s.now(), deleted_by=actor, delete_reason=body.note)
+            put(c, 'deleted_invoice', invoice, invoice['customer_id'])
+            c.execute("UPDATE operations_records SET kind='deleted_invoice' WHERE id=?", (iid,))
+            return {'id': iid, 'status': 'deleted'}
+
     @app.get('/api/operations/invoices/{iid}/mail-preview')
     def invoice_mail_preview(iid: str, actor=Depends(s.auth)):
         # Read-only: the exact email (HTML and text) a send would produce, and who would really receive it.
@@ -3900,6 +4035,10 @@ def register(app, s):
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
             d = get(c, iid, 'invoice')
+            if d.get('status') in ('void', 'deleted'):
+                raise HTTPException(409, 'A void invoice cannot be sent')
+            invoice_numbering.reserve(c, d, actor)
+            put(c, 'invoice', d, d['customer_id'])
             row = c.execute('SELECT 1 FROM operations_records WHERE id=?', (nid,)).fetchone()
             model = invoice_email(c, iid)
             if not row:
@@ -3917,6 +4056,8 @@ def register(app, s):
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
             d = get(c, iid, 'invoice')
+            if d.get('status') in ('void', 'deleted'):
+                return d
             d['status'] = n['status']
             put(c, 'invoice', d, d['customer_id'])
         return d
@@ -3965,7 +4106,7 @@ def register(app, s):
             credits = {d['id']: d for d in records(c, 'rebate', cid)}
             visible = []
             for inv in sorted(records(c, 'invoice', cid), key=lambda x: x.get('created_at', ''), reverse=True):
-                if inv.get('status') == 'draft':
+                if inv.get('status') in ('draft', 'issued', 'void', 'deleted'):
                     continue
                 paid = inv.get('payment_status') == 'received'
                 visible.append({'id': inv['id'], 'invoice_number': inv['invoice_number'], 'reference': inv.get('reference', ''), 'kind': inv['kind'], 'currency': inv['currency'],
@@ -4001,7 +4142,7 @@ def register(app, s):
                 inv = get(c, iid, 'invoice')
             except HTTPException:
                 inv = None
-            if not inv or inv['customer_id'] != cid or inv.get('status') == 'draft':
+            if not inv or inv['customer_id'] != cid or inv.get('status') in ('draft', 'issued', 'void', 'deleted'):
                 raise HTTPException(404, 'Invoice not found')
             model = invoice_email(c, iid)
         return Response(invoice_mail.render_pdf(model), media_type='application/pdf',
@@ -4081,7 +4222,7 @@ def register(app, s):
         cid, currency = orders[0]['customer_id'], orders[0]['currency']
         lines = []
         for d in orders:
-            deposit = get(c, 'deposit:'+d['id'], 'invoice')
+            deposit = deposit_for(c, d['id'])
             lines.append({'order_id': d['id'], 'amount': money(Decimal(d['total'])-Decimal(deposit['amount']))})
         for item in additional_items or []:
             lines.append({'description': item.description, 'amount': money(item.amount), 'kind': 'additional_charge'})
@@ -4172,6 +4313,9 @@ def register(app, s):
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
             inv=get(c,iid,'invoice')
+            if inv.get('status') in ('void', 'deleted'):
+                raise HTTPException(409, 'A void invoice cannot receive payments')
+            invoice_numbering.reserve(c, inv, actor)
             if inv['kind']=='deposit':
                 raise HTTPException(409,'Confirm deposits through the project deposit-received action')
             if inv.get('payment_status')!='received':

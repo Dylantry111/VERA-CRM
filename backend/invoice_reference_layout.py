@@ -45,7 +45,7 @@ def drawing(model, rows, final, page_number, page_count):
     def line(x, y, width):
         ops.append(dict(type='line', x=x, y=y, width=width, height=0))
     ops.append(dict(type='logo', x=25, y=91, width=220, height=67))
-    text(475, 105, 281, 42, 'TAX INVOICE', 32, True, 'right')
+    text(475, 105, 281, 42, model.get('document_title', 'TAX INVOICE'), 32, True, 'right')
     text(25, 161, 360, 18, 'BILL TO', 14, True)
     rect(23, 180, 377, 90)
     text(35, 202, 353, 46, model['company'], 18, True, 'center')
@@ -77,13 +77,15 @@ def drawing(model, rows, final, page_number, page_count):
         text(502, 739, 136, 26, 'Total', 18, True, 'right')
         text(648, 739, 16, 26, '$', 18, True)
         text(667, 739, 87, 26, model['due'], 18, True, 'right')
-        rect(23, 790, 738, 127)
+        payment = model.get('payment') or REFERENCE_PAYMENT
+        payment_height = max(127, 49 + len(payment) * 18)
+        rect(23, 790, 738, payment_height)
         text(25, 791, 700, 21, 'Payment Instruction', 14, True)
         payment = model.get('payment') or REFERENCE_PAYMENT
         for index, (label, value) in enumerate(payment):
             text(25, 826 + index * 18, 728, 18, f'{label}: {value}', 14)
         if model.get('reference_footer'):
-            text(25, 929, 728, 48, model['reference_footer'], 11)
+            text(25, 802 + payment_height, 728, 48, model['reference_footer'], 11)
     if page_count > 1:
         text(600, 1040, 154, 20, f'Page {page_number} of {page_count}', 11, False, 'right')
     return ops

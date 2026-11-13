@@ -12,11 +12,14 @@ os.environ['VERA_DB'] = str(Path(tempfile.mkdtemp()) / 'test.db')
 
 import invoice_mail
 from operations import backfill_invoice_numbers
+import invoice_numbering
 
 c = sqlite3.connect(':memory:')
 c.row_factory = sqlite3.Row
 c.execute('CREATE TABLE operations_records(id TEXT PRIMARY KEY,kind TEXT NOT NULL,customer_id INTEGER,data TEXT NOT NULL)')
 
+invoice_numbering.migrate(c, 'sqlite')
+invoice_numbering.reserve(c, {'id': 'manual:new'})
 
 def put(kind, d):
     c.execute('INSERT INTO operations_records(id,kind,customer_id,data) VALUES(?,?,?,?)', (d['id'], kind, 1, json.dumps(d)))
@@ -34,6 +37,6 @@ assert backfill_invoice_numbers(c) == []  # repeatable
 saved = {r['id']: json.loads(r['data']) for r in c.execute("SELECT id,data FROM operations_records WHERE kind='invoice'")}
 numbers = {'p1': 'ABC-Sterling House', 'p2': 'R26103001A'}
 assert invoice_mail.invoice_number(saved['deposit:p1'], numbers) == 'INV-00002' and saved['deposit:p1']['legacy_number'] == 'ABC-Sterling House-D'
-assert invoice_mail.invoice_reference(saved['balance:x'], numbers) == 'R26103001A, ABC-Sterling House'
-assert invoice_mail.invoice_reference(saved['manual:y'], numbers) == ''
-print('PASS invoice numbers: running INV-00001 sequence, legacy backfill oldest first and repeatable, order number as reference')
+assert invoice_mail.invoice_reference(saved['balance:x'], numbers) == 'INV-00004'
+assert invoice_mail.invoice_reference(saved['manual:y'], numbers) == 'INV-00003'
+print('PASS invoice numbers: running INV-00001 sequence, legacy backfill oldest first and repeatable, invoice number as reference')

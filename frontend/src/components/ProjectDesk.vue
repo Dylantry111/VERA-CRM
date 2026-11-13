@@ -164,15 +164,15 @@ const SENT_INVOICE_STATES = ['sent','demo_sent','demo_suppressed','sending'];
 const invoiceSent = (invoice: Invoice) => SENT_INVOICE_STATES.includes(invoice.status);
 const goodsArrived = (order: ProjectOrder) => order.arrival_status === 'arrived' || order.arrival_status === 'delivered' ||
   ['ready', 'arrived', 'complete', 'delivered', 'partially_delivered'].includes(order.status);
-const balanceInvoiceFor = (order: ProjectOrder) => invoices.value.find((invoice) => invoice.kind === 'balance' && invoice.order_ids?.includes(order.id));
-const depositInvoiceFor = (order: ProjectOrder) => invoices.value.find((invoice) => invoice.kind === 'deposit' && invoice.order_ids?.includes(order.id)) || order.invoices?.find((invoice) => invoice.kind === 'deposit');
+const balanceInvoiceFor = (order: ProjectOrder) => invoices.value.find((invoice) => invoice.kind === 'balance' && invoice.status !== 'void' && invoice.order_ids?.includes(order.id));
+const depositInvoiceFor = (order: ProjectOrder) => invoices.value.find((invoice) => invoice.kind === 'deposit' && invoice.status !== 'void' && invoice.order_ids?.includes(order.id)) || order.invoices?.find((invoice) => invoice.kind === 'deposit' && invoice.status !== 'void');
 const financeQueues = computed(() => {
   const depositDue = financeOrders.value.filter((order) => order.status !== 'pending_review' && order.payment_status === 'deposit_unpaid');
   const depositDueIds = new Set(depositDue.map((order) => order.id));
   const balanceReady = financeOrders.value.filter((order) => order.payment_status === 'deposit_received' && goodsArrived(order) && !balanceInvoiceFor(order));
   // A deposit invoice for an order still in step 1 is sent from step 1, so it is not listed twice.
   const toSend = financeInvoices.value.filter((invoice) => !invoiceSent(invoice) && invoice.payment_status !== 'received' &&
-    !(invoice.kind === 'deposit' && invoice.order_ids?.some((id) => depositDueIds.has(id))));
+    !(invoice.kind === 'deposit' && invoice.status !== 'void' && invoice.order_ids?.some((id) => depositDueIds.has(id))));
   const balanceDue = financeInvoices.value.filter((invoice) => invoice.kind === 'balance' && invoiceSent(invoice) && invoice.payment_status !== 'received');
   const done = financeInvoices.value.filter((invoice) => invoice.payment_status === 'received');
   const active = new Set([...depositDue, ...balanceReady].map((order) => order.id));
@@ -489,7 +489,7 @@ async function load() {
     if (requested.length) {
       const eligible = listed.filter(order => requested.includes(order.id) &&
         String(order.customer_id) === financeCustomer.value && order.payment_status === 'deposit_received' && goodsArrived(order) &&
-        !billed.some(invoice => invoice.kind === 'balance' && invoice.order_ids?.includes(order.id)));
+        !billed.some(invoice => invoice.kind === 'balance' && invoice.status !== 'void' && invoice.order_ids?.includes(order.id)));
       picked.value = eligible.map(order => order.id);
       if (eligible.length !== requested.length) {
         error.value = tx('部分所选订单在打开尾款页面前已不符合开票条件；请检查订单状态。', 'Some selected orders no longer meet the balance-invoice requirements. Review their status before invoicing.');

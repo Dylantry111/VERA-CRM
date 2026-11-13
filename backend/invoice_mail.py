@@ -39,6 +39,8 @@ def invoice_number(invoice, order_numbers):
     (deposit V0000101-D, balance V0000105-B) until backfill_invoice_numbers.py gives them one."""
     if invoice.get('fixed_number'):
         return invoice['fixed_number']
+    if invoice.get('draft_number'):
+        return invoice['draft_number']
     letter = 'D' if invoice.get('kind') == 'deposit' else 'B'
     numbers = sorted(order_numbers.get(oid) or '' for oid in invoice.get('order_ids', []))
     first = next((n for n in numbers if n), '')
@@ -48,9 +50,8 @@ def invoice_number(invoice, order_numbers):
 
 
 def invoice_reference(invoice, order_numbers):
-    """The reference is the order number; an invoice for several orders lists each one."""
-    numbers = [order_numbers.get(oid) for oid in dict.fromkeys(invoice.get('order_ids', []))]
-    return ', '.join(n for n in numbers if n)
+    """Payment matches the immutable invoice number, independent of its orders."""
+    return invoice.get('fixed_number') or ''
 
 
 def payment_lines(payment, labels=None, gst_number='', visible=None):
@@ -158,6 +159,7 @@ def build(invoice, customer, orders, payment=None):
         description = str(labels.get('credit_line') or 'Credit from {month}').replace('{month}', 'rebate')
         rows.append({'order': '', 'item': description, 'description': description, 'project': description, 'site': '', 'order_total': '', 'unit_price': '', 'quantity': '', 'gst_rate': gst_rate, 'amount': money(-rebate)})
     bank = payment_lines(payment, labels, template.get('gst_number', ''), {} if (template.get('invoice_designs') or {}).get(kind_key, {}).get('elements') is not None else fields)
+    bank.append(('Payment reference', reference or 'Assigned when invoice is issued'))
     logo = ''
     try:
         logo_path = os.path.join(os.path.dirname(__file__), 'vera-logo.png')
@@ -167,6 +169,8 @@ def build(invoice, customer, orders, payment=None):
         pass
     model = {
         'number': number,
+        'invoice_status': invoice.get('status'),
+        'document_title': 'VOID INVOICE' if invoice.get('status') == 'void' else ('TAX INVOICE' if invoice.get('fixed_number') else 'DRAFT INVOICE'),
         'reference': reference,
         'kind': 'Deposit invoice' if deposit else ('Invoice' if manual else 'Balance invoice'),
         'kind_key': kind,
@@ -232,6 +236,8 @@ def build(invoice, customer, orders, payment=None):
         'columns': {'unit_price': columns.get('unit_price', True), 'quantity': columns.get('quantity', True), 'gst': columns.get('gst', True)},
         'field_settings': fields,
     }
+    if not invoice.get('fixed_number') or invoice.get('status') == 'void':
+        model['labels']['invoice_title'] = model['document_title']
     model['subject'] = f"VERA invoice {number}"
     model['text'] = _text(model)
     model['html'] = _html(model)
