@@ -252,6 +252,38 @@ _DEFAULT_AREAS = {
 _DEFAULT_ALIGNMENTS = {'heading': 'right', 'totals': 'right'}
 
 
+def default_invoice_canvas_elements():
+    def item(id, field, x, y, width, height, font_size=12, bold=False, align='left'):
+        return {'id': id, 'type': 'field', 'field': field, 'text': '', 'shape': 'rectangle', 'x': x, 'y': y,
+                'width': width, 'height': height, 'font_family': 'Arial', 'font_size': font_size,
+                'color': '#263640', 'background': '', 'border_color': '#d5dde2', 'border_width': 0,
+                'bold': bold, 'italic': False, 'align': align}
+    return [
+        {**item('logo', '', 48, 38, 220, 75), 'type': 'logo'},
+        item('company-name', 'company_name', 48, 128, 330, 24, 16, True),
+        item('company-gst', 'company_gst', 48, 153, 330, 18, 9),
+        item('company-address', 'company_address', 48, 172, 330, 36, 9),
+        item('invoice-title', 'invoice_title', 438, 46, 308, 36, 24, True, 'right'),
+        item('invoice-number', 'invoice_number', 438, 84, 308, 22, 13, True, 'right'),
+        item('invoice-reference', 'invoice_reference', 438, 108, 308, 20, 10, False, 'right'),
+        item('invoice-date', 'invoice_date', 438, 130, 308, 20, 10, False, 'right'),
+        item('due-date', 'due_date', 438, 152, 308, 20, 10, False, 'right'),
+        item('customer-label', 'customer_label', 48, 236, 330, 18, 9, True),
+        item('customer-company', 'customer_company', 48, 257, 330, 24, 13, True),
+        item('customer-contact', 'customer_contact', 48, 282, 330, 20, 10),
+        item('customer-address', 'customer_address', 48, 303, 330, 40, 10),
+        item('order-details', 'order_summary', 48, 375, 698, 245, 10),
+        item('invoice-note', 'invoice_note', 48, 640, 698, 54, 9),
+        item('subtotal', 'subtotal', 430, 735, 316, 22, 11, False, 'right'),
+        item('gst-total', 'gst_total', 430, 758, 316, 22, 10, False, 'right'),
+        {**item('total-highlight', '', 425, 784, 321, 43), 'type': 'shape', 'background': '#edf2f4', 'border_width': 0},
+        item('invoice-total', 'invoice_total', 438, 793, 296, 26, 15, True, 'right'),
+        item('payment-heading', 'payment_heading', 48, 862, 698, 22, 11, True),
+        item('payment-details', 'payment_details', 48, 888, 698, 72, 10),
+        item('footer', 'footer', 48, 1014, 698, 54, 9),
+    ]
+
+
 def default_invoice_design():
     return {'blocks': [{'id': block, 'enabled': True, 'align': _DEFAULT_ALIGNMENTS.get(block, 'left'), 'width': 220, 'area': _DEFAULT_AREAS[block]} for block in _LAYOUT_BLOCKS]}
 
@@ -286,7 +318,16 @@ def invoice_design(template, kind):
             block['align'] = base['align']
         if block['id'] in ('order_lines', 'totals'):
             block['enabled'] = True
-    return {'blocks': ordered}
+    elements = saved.get('elements')
+    if not isinstance(elements, list):
+        elements = default_invoice_canvas_elements()
+    allowed_fields = {'company_name', 'company_gst', 'company_address', 'invoice_title', 'invoice_number', 'invoice_reference', 'invoice_date', 'due_date',
+                      'customer_label', 'customer_company', 'customer_contact', 'customer_address', 'customer_phone', 'customer_email',
+                      'order_summary', 'order_id', 'description', 'site_address', 'order_total', 'gst', 'amount_due', 'subtotal',
+                      'gst_total', 'invoice_total', 'payment_heading', 'payment_details', 'invoice_note', 'footer'}
+    elements = [element for element in elements if isinstance(element, dict) and element.get('type') in ('text', 'field', 'shape', 'logo')
+                and (element.get('type') != 'field' or element.get('field') in allowed_fields)]
+    return {'blocks': ordered, 'elements': elements}
 
 
 def sample_preview(template, payment, kind):
@@ -340,6 +381,82 @@ def _invoice_amount(m, value):
 
 def _invoice_subtotal(m):
     return money(Decimal(str(m['due']).replace(',', '')) - Decimal(str(m['gst']).replace(',', '')))
+
+
+def _canvas_field_value(m, key):
+    labels = m['labels']
+    settings = m['field_settings']
+    visibility = {
+        'company_name': settings.get('company_name', True), 'company_gst': settings.get('company_gst', True),
+        'company_address': settings.get('company_address', True), 'customer_company': settings.get('customer_company', True),
+        'customer_contact': settings.get('customer_contact', True), 'customer_address': settings.get('customer_address', True),
+        'customer_phone': settings.get('customer_phone', False), 'customer_email': settings.get('customer_email', False),
+        'customer_label': any(settings.get(name, False) for name in ('customer_company', 'customer_contact', 'customer_address', 'customer_phone', 'customer_email')),
+        'invoice_title': settings.get('invoice_title', True), 'invoice_number': settings.get('invoice_number', True),
+        'invoice_reference': settings.get('invoice_reference', True), 'invoice_date': settings.get('invoice_date', True), 'due_date': settings.get('due_date', True),
+        'order_summary': bool(settings.get('item_columns', [])),
+        'order_id': 'order_id' in settings.get('item_columns', []), 'description': 'description' in settings.get('item_columns', []),
+        'site_address': 'site_address' in settings.get('item_columns', []), 'order_total': 'order_total' in settings.get('item_columns', []),
+        'gst': 'gst' in settings.get('item_columns', []), 'amount_due': 'amount' in settings.get('item_columns', []),
+        'subtotal': settings.get('subtotal', True), 'gst_total': settings.get('gst_total', True), 'invoice_total': settings.get('invoice_total', True),
+        'payment_heading': settings.get('payment_heading', True), 'payment_details': bool(m['payment']),
+    }
+    if key in visibility and not visibility[key]:
+        return ''
+    values = {
+        'company_name': m['brand'], 'company_gst': f"{labels['company_gst']} {m['brand_gst']}" if m['brand_gst'] else '',
+        'company_address': m['brand_address'], 'invoice_title': labels['invoice_title'],
+        'invoice_number': f"{labels['invoice_number']} {m['number']}",
+        'invoice_reference': f"{labels['reference']}: {m['reference']}" if m['reference'] else '',
+        'invoice_date': f"{labels['invoice_date']}: {m['formatted_date']}",
+        'due_date': f"{labels['due_date']}: {m['formatted_due_date']}",
+        'customer_label': labels['bill_to'], 'customer_company': m['company'], 'customer_contact': m['contact'],
+        'customer_address': m['address'], 'customer_phone': m['customer_phone'], 'customer_email': m['customer_email'],
+        'order_id': '\n'.join(row.get('order', '') for row in m['rows'] if row.get('order')),
+        'description': '\n'.join(row.get('description', '') for row in m['rows'] if row.get('description')),
+        'site_address': '\n'.join(row.get('site', '') for row in m['rows'] if row.get('site')),
+        'order_total': '\n'.join(f"{m['currency']} {row['order_total']}" for row in m['rows'] if row.get('order_total')),
+        'gst': '\n'.join(row.get('gst_rate', '') for row in m['rows'] if row.get('gst_rate')),
+        'amount_due': '\n'.join(f"{m['currency']} {row['amount']}" for row in m['rows'] if row.get('amount')),
+        'order_summary': '\n'.join(' · '.join(value for value in (row.get('order'), row.get('description'), row.get('site')) if value)
+                                    + (f"    {m['currency']} {row['amount']}" if row.get('amount') else '') for row in m['rows']),
+        'subtotal': f"{labels['subtotal']}: {m['currency']} {_invoice_subtotal(m)}",
+        'gst_total': f"{labels['gst_included']} ({m['gst_rate']}): {m['currency']} {m['gst']}",
+        'invoice_total': f"{labels['total']}: {m['currency']} {m['due']}",
+        'payment_heading': labels['payment_instruction'],
+        'payment_details': '\n'.join(f'{label}: {value}' for label, value in m['payment']),
+        'invoice_note': m['basis'], 'footer': m['footer'],
+    }
+    return str(values.get(key, '') or '')
+
+
+def _canvas_html(m):
+    elements = (m.get('design') or {}).get('elements') or []
+    pieces = []
+    for element in elements:
+        kind = element.get('type', 'text')
+        x, y = int(element.get('x', 0)), int(element.get('y', 0))
+        width, height = int(element.get('width', 200)), int(element.get('height', 30))
+        style = (f'left:{x}px;top:{y}px;width:{width}px;height:{height}px;box-sizing:border-box;'
+                 f'font-family:"{element.get("font_family", "Arial")}",sans-serif;font-size:{int(element.get("font_size", 12))}px;'
+                 f'color:{element.get("color", "#263640")};background:{element.get("background") or "transparent"};'
+                 f'border:{int(element.get("border_width", 0))}px solid {element.get("border_color", "#d5dde2")};'
+                 f'font-weight:{"700" if element.get("bold") else "400"};font-style:{"italic" if element.get("italic") else "normal"};'
+                 f'text-align:{element.get("align", "left")};')
+        if kind == 'shape':
+            if element.get('shape') == 'line':
+                style += f'height:0;border:0;border-top:{max(1,int(element.get("border_width", 1)))}px solid {element.get("border_color", "#d5dde2")};background:transparent;'
+            pieces.append(f'<div style="position:absolute;{style}"></div>')
+        elif kind == 'logo':
+            if m.get('logo'):
+                pieces.append(f'<img alt="VERA logo" src="{m["logo"]}" style="position:absolute;{style}object-fit:contain;border:0;background:transparent" />')
+        else:
+            text = element.get('text', '') if kind == 'text' else _canvas_field_value(m, element.get('field', ''))
+            pieces.append(f'<div style="position:absolute;{style}overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere;padding:2px">{escape(str(text))}</div>')
+    return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=794,initial-scale=1"><style>
+*{{box-sizing:border-box}}html,body{{margin:0;width:794px;height:1123px;overflow:hidden!important;background:#fff;font-family:Arial,Helvetica,sans-serif;color:#263640}}
+@page{{size:A4;margin:0}}#paper{{position:relative;width:794px;height:1123px;overflow:hidden;background:#fff}}
+</style></head><body><main id="paper">{''.join(pieces)}</main></body></html>'''
 
 
 def _text(m):
@@ -427,6 +544,8 @@ def _html(m, a4=False):
     e = escape
     accent, ink, line = '#405969', '#263640', '#dce4e8'
     labels = m['labels']
+    if 'elements' in (m.get('design') or {}):
+        return _canvas_html(m)
     columns = _invoice_table_columns(m)
     headings = ''.join(f'<td align="right" style="padding:8px 0 8px 12px;border-bottom:2px solid {ink};font-size:11px;color:#64766b">{e(label)}</td>' for _, label in columns)
     rows = ''
@@ -601,8 +720,83 @@ def render_pdf(m):
 _render_pdf_legacy = render_pdf
 
 
+def _render_canvas_pdf(m):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import Paragraph
+    try:
+        pdfmetrics.getFont('STSong-Light')
+    except KeyError:
+        pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+    buffer = io.BytesIO()
+    page = canvas.Canvas(buffer, pagesize=A4, pageCompression=1)
+    page_width, page_height = A4
+    sx, sy = page_width / 794, page_height / 1123
+    font_families = {'Arial': 'Helvetica', 'Verdana': 'Helvetica', 'Georgia': 'Times-Roman', 'Times New Roman': 'Times-Roman', 'Courier New': 'Courier'}
+    for element in (m.get('design') or {}).get('elements') or []:
+        x, y = int(element.get('x', 0)) * sx, page_height - int(element.get('y', 0)) * sy
+        width, height = int(element.get('width', 200)) * sx, int(element.get('height', 30)) * sy
+        kind = element.get('type', 'text')
+        if kind == 'shape':
+            if element.get('shape') == 'line':
+                page.setStrokeColor(colors.HexColor(element.get('border_color', '#d5dde2')))
+                page.setLineWidth(max(1, int(element.get('border_width', 1))))
+                page.line(x, y, x + width, y)
+            else:
+                border_width = int(element.get('border_width', 0))
+                page.setLineWidth(border_width or 0.1)
+                page.setStrokeColor(colors.HexColor(element.get('border_color', '#d5dde2')))
+                if element.get('background'):
+                    page.setFillColor(colors.HexColor(element['background']))
+                else:
+                    page.setFillColor(colors.white)
+                page.rect(x, y - height, width, height, fill=1 if element.get('background') else 0, stroke=1 if border_width else 0)
+            continue
+        if kind == 'logo':
+            if m.get('logo'):
+                page.drawImage(ImageReader(io.BytesIO(base64.b64decode(m['logo'].split(',', 1)[1]))), x, y - height,
+                               width=width, height=height, preserveAspectRatio=True, anchor='c', mask='auto')
+            continue
+        value = element.get('text', '') if kind == 'text' else _canvas_field_value(m, element.get('field', ''))
+        if not value:
+            continue
+        base_font = font_families.get(element.get('font_family', 'Arial'), 'Helvetica')
+        font_name = {'Helvetica': 'Helvetica-Bold', 'Times-Roman': 'Times-Bold', 'Courier': 'Courier-Bold'}.get(base_font, base_font) if element.get('bold') else base_font
+        if element.get('italic'):
+            suffix = '-BoldItalic' if element.get('bold') else '-Italic'
+            font_name = {'Helvetica': 'Helvetica' + ('-BoldOblique' if element.get('bold') else '-Oblique'),
+                         'Times-Roman': 'Times' + suffix, 'Courier': 'Courier' + ('-BoldOblique' if element.get('bold') else '-Oblique')}[base_font]
+        safe = escape(str(value)).replace('\n', '<br/>')
+        safe = _CJK.sub(lambda match: f'<font name="STSong-Light">{match.group(1)}</font>', safe)
+        size = int(element.get('font_size', 12)) * .75
+        style = ParagraphStyle('canvas_element', fontName=font_name, fontSize=size, leading=size * 1.25,
+                               textColor=colors.HexColor(element.get('color', '#263640')),
+                               alignment={'left': 0, 'center': 1, 'right': 2}.get(element.get('align'), 0), splitLongWords=1)
+        para = Paragraph(safe, style)
+        para.wrapOn(page, max(1, width - 6), max(1, height - 4))
+        if element.get('background'):
+            page.setFillColor(colors.HexColor(element['background']))
+            page.rect(x, y - height, width, height, fill=1, stroke=0)
+        border_width = int(element.get('border_width', 0))
+        if border_width:
+            page.setStrokeColor(colors.HexColor(element.get('border_color', '#d5dde2')))
+            page.setLineWidth(border_width)
+            page.rect(x, y - height, width, height, fill=0, stroke=1)
+        para.drawOn(page, x + 3, y - height + max(2, (height - para.height) / 2))
+    page.showPage()
+    page.save()
+    return buffer.getvalue()
+
+
 def render_pdf(m):
-    """A4 invoice PDF rendered from the same movable blocks as the HTML invoice."""
+    """A4 invoice PDF rendered from the same movable elements as the HTML invoice."""
+    if 'elements' in (m.get('design') or {}):
+        return _render_canvas_pdf(m)
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle

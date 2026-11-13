@@ -1055,8 +1055,30 @@ class InvoiceDesignBlock(Input):
     area: Literal['top_left', 'top_right', 'middle_left', 'middle_right', 'items', 'bottom_left', 'bottom_right', 'footer'] = 'middle_left'
 
 
+class InvoiceCanvasElement(Input):
+    id: str = Field(min_length=1, max_length=80)
+    type: Literal['text', 'field', 'shape', 'logo'] = 'text'
+    field: str = Field(default='', max_length=60)
+    text: str = Field(default='', max_length=2000)
+    shape: Literal['rectangle', 'line'] = 'rectangle'
+    x: int = Field(default=48, ge=0, le=794)
+    y: int = Field(default=48, ge=0, le=1123)
+    width: int = Field(default=260, ge=12, le=794)
+    height: int = Field(default=40, ge=8, le=1123)
+    font_family: Literal['Arial', 'Georgia', 'Times New Roman', 'Verdana', 'Courier New'] = 'Arial'
+    font_size: int = Field(default=12, ge=6, le=72)
+    color: str = Field(default='#263640', pattern=r'^#[0-9a-fA-F]{6}$')
+    background: str = Field(default='', pattern=r'^(|#[0-9a-fA-F]{6})$')
+    border_color: str = Field(default='#d5dde2', pattern=r'^#[0-9a-fA-F]{6}$')
+    border_width: int = Field(default=0, ge=0, le=8)
+    bold: bool = False
+    italic: bool = False
+    align: Literal['left', 'center', 'right'] = 'left'
+
+
 class InvoiceDesign(Input):
     blocks: list[InvoiceDesignBlock] = Field(default_factory=list, max_length=9)
+    elements: list[InvoiceCanvasElement] = Field(default_factory=list, max_length=80)
 
 
 class InvoiceLabels(Input):
