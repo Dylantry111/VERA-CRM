@@ -20,6 +20,11 @@ line-item associations. Draft previews have no payable reference. A lookup of a
 historical number shared by multiple invoices returns a conflict for manual
 customer/amount reconciliation rather than selecting one arbitrarily.
 
+Before email delivery is queued, existing invoices use the currently saved
+template and payment settings, including legacy imports with blank snapshots.
+Queueing saves that presentation for the email and PDF. Pending, sent, and
+uncertain deliveries retain their saved version when settings later change.
+
 The versioned `invoice-numbering-v2` migration preserves unique existing numbers,
 repairs unsent duplicate historical records, and records old/new mappings in
 `invoice_number_audit` and invoice metadata. It refuses to silently renumber a

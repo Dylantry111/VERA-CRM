@@ -1478,9 +1478,23 @@ def register(app, s):
                 i['reference'] = invoice_mail.invoice_reference(i, numbers)
         return out
 
+    def invoice_presentation(c, inv):
+        # Until delivery is queued, settings edits must affect existing invoices
+        # as well as new ones. Legacy imports often contain a truthy but entirely
+        # blank payment snapshot. Once queued, keep HTML and the PDF attachment
+        # on the same saved version, including an uncertain delivery result.
+        delivery_state = inv.get('status')
+        if inv.get('notification_id'):
+            row = c.execute("SELECT data FROM operations_records WHERE id=? AND kind='notification'", (inv['notification_id'],)).fetchone()
+            if row:
+                delivery_state = json.loads(row['data']).get('status')
+        if delivery_state in ('pending', 'sending', 'sent', 'demo_sent', 'delivery_unknown'):
+            return dict(inv)
+        return {**inv, 'template': invoice_template(c), 'payment_details': payment_view(payment_details(c))}
+
     def invoice_email(c, iid):
         # One builder for the stored invoice: used by preview, queueing, delivery and the PDF download.
-        inv = get(c, iid, 'invoice')
+        inv = invoice_presentation(c, get(c, iid, 'invoice'))
         orders = {oid: get(c, oid, 'project') for oid in inv['order_ids']}
         email_invoice = dict(inv)
         email_invoice.setdefault('template', invoice_template(c))
@@ -4037,6 +4051,7 @@ def register(app, s):
             d = get(c, iid, 'invoice')
             if d.get('status') in ('void', 'deleted'):
                 raise HTTPException(409, 'A void invoice cannot be sent')
+            d = invoice_presentation(c, d)
             invoice_numbering.reserve(c, d, actor)
             put(c, 'invoice', d, d['customer_id'])
             row = c.execute('SELECT 1 FROM operations_records WHERE id=?', (nid,)).fetchone()
