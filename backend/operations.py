@@ -1079,12 +1079,53 @@ class InvoiceLabels(Input):
     payment_gst: str = Field(default='GST', max_length=80)
     payment_note: str = Field(default='Note', max_length=80)
     credit_line: str = Field(default='Credit from {month}', max_length=120)
+    company_gst: str = Field(default='GST No.', max_length=80)
+    reference: str = Field(default='Reference', max_length=80)
+    order_id: str = Field(default='Order ID', max_length=80)
+    description: str = Field(default='Description', max_length=80)
+    site_address: str = Field(default='Site address', max_length=80)
+    order_total: str = Field(default='Order total', max_length=80)
+    amount_due: str = Field(default='Amount due', max_length=80)
 
 
 class InvoiceColumns(Input):
     unit_price: bool = True
     quantity: bool = True
     gst: bool = True
+
+
+class InvoiceFieldSettings(Input):
+    company_name: bool = True
+    company_gst: bool = True
+    company_address: bool = True
+    customer_company: bool = True
+    customer_contact: bool = True
+    customer_address: bool = True
+    customer_phone: bool = False
+    customer_email: bool = False
+    invoice_title: bool = True
+    invoice_number: bool = True
+    invoice_reference: bool = True
+    invoice_date: bool = True
+    due_date: bool = True
+    item_columns: list[Literal['order_id', 'description', 'site_address', 'order_total', 'gst', 'amount']] = Field(
+        default_factory=lambda: ['order_id', 'description', 'order_total', 'gst', 'amount'], max_length=6)
+    subtotal: bool = True
+    gst_total: bool = True
+    invoice_total: bool = True
+    payment_heading: bool = True
+    payment_bank: bool = True
+    payment_account_name: bool = True
+    payment_account_number: bool = True
+    payment_note: bool = True
+    payment_gst: bool = True
+
+    @field_validator('item_columns')
+    @classmethod
+    def require_invoice_amount(cls, value):
+        if 'amount' not in value:
+            raise ValueError('The invoice amount column must remain visible')
+        return value
 
 
 class InvoiceTemplate(Input):
@@ -1096,6 +1137,7 @@ class InvoiceTemplate(Input):
     balance_note: str = Field(default='Balance of each order after the deposit already paid. Amounts include GST.', max_length=500)
     invoice_labels: InvoiceLabels = Field(default_factory=InvoiceLabels)
     invoice_columns: InvoiceColumns = Field(default_factory=InvoiceColumns)
+    invoice_field_settings: dict[Literal['deposit', 'balance', 'manual'], InvoiceFieldSettings] = Field(default_factory=dict)
     invoice_designs: dict[Literal['deposit', 'balance', 'manual'], InvoiceDesign] = Field(default_factory=dict)
 
     @field_validator('invoice_designs')
