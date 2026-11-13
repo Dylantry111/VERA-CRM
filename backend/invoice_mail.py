@@ -8,6 +8,7 @@ import os
 import re
 import base64
 from datetime import date
+from invoice_dates import invoice_created_date, invoice_due_date
 from decimal import Decimal, ROUND_HALF_UP
 from html import escape
 
@@ -170,9 +171,9 @@ def build(invoice, customer, orders, payment=None):
         'kind': 'Deposit invoice' if deposit else ('Invoice' if manual else 'Balance invoice'),
         'kind_key': kind,
         'is_deposit': deposit,
-        'date': str(invoice.get('created_at', ''))[:10],
+        'date': invoice_created_date(invoice['created_at']).isoformat() if invoice.get('created_at') else '',
         'due_date': str(invoice.get('due_date') or '—')[:10],
-        'formatted_date': invoice_date(invoice.get('created_at')),
+        'formatted_date': invoice_date(invoice_created_date(invoice['created_at']).isoformat()) if invoice.get('created_at') else '',
         'formatted_due_date': invoice_date(invoice.get('due_date')),
         'currency': currency,
         'tax_basis': str(invoice.get('tax_basis', '')).replace('_', ' '),
@@ -337,7 +338,7 @@ def sample_preview(template, payment, kind):
     customer = {'company': 'Auckland Shutters', 'contact_name': 'Jeremy', 'company_address': 'Auckland, New Zealand'}
     invoice = {
         'id': 'preview-invoice', 'fixed_number': 'INV-00042', 'kind': kind, 'customer_id': 1,
-        'created_at': '2026-11-12', 'due_date': '2026-11-26', 'currency': 'NZD',
+        'created_at': '2026-11-12', 'due_date': invoice_due_date('2026-11-12'), 'currency': 'NZD',
         'tax_rate': '0.15', 'deposit_rate': '0.60', 'tax_basis': 'GST inclusive',
         'amount': '1201.06' if kind == 'deposit' else ('801.06' if kind == 'balance' else '460.00'),
         'gross': '1201.06' if kind != 'manual' else '460.00', 'template': template,

@@ -10,7 +10,6 @@ const tx = (zh: string, en: string) => (props.locale === "zh" ? zh : en);
 // Charges outside an order balance (installation, air freight, credits). Amounts include GST; a credit is a negative line.
 const GST_RATE = 0.15;
 const customerId = ref<number | "">("");
-const dueDate = ref("");
 const customerSearch = ref("");
 const items = reactive<{ description: string; amount: string }[]>([{ description: "", amount: "" }]);
 const busy = ref(false);
@@ -18,7 +17,7 @@ const error = ref("");
 const notice = ref("");
 let operationKey = crypto.randomUUID();
 // An edited form is a different request; an untouched retry keeps its key so it can never create a second invoice.
-watch([customerId, dueDate, items], () => { operationKey = crypto.randomUUID(); }, { deep: true });
+watch([customerId, items], () => { operationKey = crypto.randomUUID(); }, { deep: true });
 const filteredCustomers = computed(() => props.customers.filter(customer => `${customer.company} ${customer.customer_code || ''}`.toLowerCase().includes(customerSearch.value.toLowerCase())));
 
 const cents = (text: string) => {
@@ -38,7 +37,6 @@ const gstCents = computed(() => Math.round(totalCents.value * GST_RATE / (1 + GS
 const money = (value: number) => (value / 100).toLocaleString("en-NZ", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const blocker = computed(() => {
   if (!customerId.value) return tx("先选择公司", "Choose a company first");
-  if (!dueDate.value) return tx("请选择付款到期日", "Choose a due date");
   if (!filled.value.length) return tx("至少填一行", "Add at least one line");
   if (filled.value.some((line) => lineIssue(line))) return tx("请先修正标红的行", "Fix the highlighted lines first");
   if (totalCents.value <= 0) return tx("合计必须大于 0；抵扣请写成负数行并配正数项目", "The total must be above 0; enter credits as negative lines next to charges");
@@ -56,11 +54,10 @@ async function submit() {
     const invoice = await request<any>("operations/invoices/manual", {
       customer_id: Number(customerId.value),
       items: filled.value.map((line) => ({ description: line.description.trim(), amount: line.amount.trim() })),
-      due_date: dueDate.value,
       operation_key: operationKey,
     });
     notice.value = tx(`已创建账单草稿 ${invoice.invoice_number}，可在发票列表预览并发送。`, `Draft invoice ${invoice.invoice_number} created. Preview and send it from the invoice list.`);
-    items.splice(0, items.length, { description: "", amount: "" }); dueDate.value = "";
+    items.splice(0, items.length, { description: "", amount: "" });
     emit("created", invoice);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause);
@@ -81,7 +78,7 @@ async function submit() {
         <option v-for="customer in filteredCustomers" :key="customer.customer_id" :value="customer.customer_id">{{ customer.company }}{{ customer.customer_code ? ` (${customer.customer_code})` : "" }}</option>
       </select>
     </label>
-    <label class="company">{{ tx("付款到期日", "Due date") }}<input v-model="dueDate" type="date" required /></label>
+    <p class="company">Due date is automatically set to 3 working days after the invoice date (Monday-Friday).</p>
     <div class="lines">
       <div class="line head" aria-hidden="true"><span>{{ tx("项目说明", "Description") }}</span><span>{{ tx("金额（含 GST）", "Amount (incl. GST)") }}</span><span></span></div>
       <div v-for="(line, index) in items" :key="index" class="line" :class="{ bad: lineIssue(line) }">

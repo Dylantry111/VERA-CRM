@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 WEBSITE_IMAGES = json.loads((Path(__file__).parent / "website_products.json").read_text(encoding="utf-8"))
 
 import invoice_mail
+from invoice_dates import invoice_due_date
 from addons import sync_opening_style
 from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field, SecretStr, ConfigDict, field_validator, model_validator
@@ -570,8 +571,10 @@ def backfill_order_numbers(c):
     return changed
 
 
-def number_invoice(c, d):
+def number_invoice(c, d, *, new=True):
     """Give an invoice the next running number. Call inside BEGIN IMMEDIATE so two invoices never share one."""
+    if new:
+        d['due_date'] = invoice_due_date(d['created_at'])
     rows = c.execute("SELECT data FROM operations_records WHERE kind='invoice'").fetchall()
     sequence = max((int(json.loads(r['data']).get('sequence') or 0) for r in rows), default=0) + 1
     d['sequence'] = sequence
@@ -587,7 +590,7 @@ def backfill_invoice_numbers(c):
     pending = sorted((d for d in (json.loads(r['data']) for r in rows) if not d.get('sequence')), key=lambda d: (d.get('created_at', ''), d['id']))
     for d in pending:
         d['legacy_number'] = invoice_mail.invoice_number(d, projects)
-        number_invoice(c, d)
+        number_invoice(c, d, new=False)
         c.execute('UPDATE operations_records SET data=? WHERE id=?', (json.dumps(d, ensure_ascii=False), d['id']))
     return [(d['legacy_number'], d['invoice_number']) for d in pending]
 
