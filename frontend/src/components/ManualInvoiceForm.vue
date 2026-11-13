@@ -3,13 +3,15 @@ import { computed, reactive, ref, watch } from "vue";
 import { Plus, Trash2 } from "lucide-vue-next";
 import { request } from "../crm-api";
 
-const props = defineProps<{ customers: { customer_id: number; company: string; customer_code?: string }[]; locale: string }>();
+const props = defineProps<{ customers: { customer_id: number; company: string; customer_code?: string }[]; locale: string; selectedCustomerId?: number }>();
 const emit = defineEmits<{ (event: "created", invoice: any): void }>();
 const tx = (zh: string, en: string) => (props.locale === "zh" ? zh : en);
 
 // Charges outside an order balance (installation, air freight, credits). Amounts include GST; a credit is a negative line.
 const GST_RATE = 0.15;
-const customerId = ref<number | "">("");
+const customerId = ref<number | "">(props.selectedCustomerId || "");
+watch(()=>props.selectedCustomerId,value=>{if(value)customerId.value=value;});
+const selectedCustomerName=computed(()=>props.customers.find(row=>row.customer_id===Number(customerId.value))?.company||"");
 const customerSearch = ref("");
 const items = reactive<{ description: string; amount: string }[]>([{ description: "", amount: "" }]);
 const busy = ref(false);
@@ -71,14 +73,14 @@ async function submit() {
       <h3>{{ tx("手动账单", "Manual invoice") }}</h3>
       <p>{{ tx("用于订单尾款以外的费用，如安装、空运运费、抵扣。金额含 GST，抵扣写成负数。它是单独的一张账单，不并入订单尾款。", "For charges outside the order balance, such as installation, air freight or credits. Amounts include GST; enter a credit as a negative line. It is its own invoice, separate from the order balance.") }}</p>
     </header>
-    <label class="company">{{ tx("筛选客户", "Find customer") }}<input v-model="customerSearch" type="search" :placeholder="tx('输入公司名称','Search company name')" /></label>
+    <div v-if="props.selectedCustomerId" class="invoice-customer-summary"><span>Customer</span><strong>{{selectedCustomerName}}</strong></div><template v-else><label class="company">{{ tx("筛选客户", "Find customer") }}<input v-model="customerSearch" type="search" :placeholder="tx('输入公司名称','Search company name')" /></label>
     <label class="company">{{ tx("客户", "Customer") }}
       <select v-model.number="customerId">
         <option value="">{{ tx("选择公司", "Choose a company") }}</option>
         <option v-for="customer in filteredCustomers" :key="customer.customer_id" :value="customer.customer_id">{{ customer.company }}{{ customer.customer_code ? ` (${customer.customer_code})` : "" }}</option>
       </select>
     </label>
-    <p class="company">Due date is automatically set to 3 working days after the invoice date (Monday-Friday).</p>
+    </template><p class="company">Due date is automatically set to 3 working days after the invoice date (Monday-Friday).</p>
     <div class="lines">
       <div class="line head" aria-hidden="true"><span>{{ tx("项目说明", "Description") }}</span><span>{{ tx("金额（含 GST）", "Amount (incl. GST)") }}</span><span></span></div>
       <div v-for="(line, index) in items" :key="index" class="line" :class="{ bad: lineIssue(line) }">
@@ -90,8 +92,8 @@ async function submit() {
       <button type="button" class="add" @click="addLine"><Plus :size="14" aria-hidden="true" />{{ tx("添加一行", "Add line") }}</button>
     </div>
     <dl class="totals">
-      <div><dt>{{ tx("合计（含 GST）", "Total (incl. GST)") }}</dt><dd>NZD {{ money(totalCents) }}</dd></div>
       <div class="gst"><dt>{{ tx("其中 GST (15%)", "Of which GST (15%)") }}</dt><dd>NZD {{ money(gstCents) }}</dd></div>
+      <div><dt>{{ tx("合计（含 GST）", "Total (incl. GST)") }}</dt><dd>NZD {{ money(totalCents) }}</dd></div>
     </dl>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
     <p v-if="notice" class="ok" role="status">{{ notice }}</p>
@@ -129,3 +131,5 @@ footer{display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap}
 .hint{font-size:12px;color:#64766b}
 @media(max-width:560px){.line{grid-template-columns:minmax(0,1fr) 34px}.line.head{display:none}.line input:nth-of-type(2){grid-column:1}.line .icon{grid-row:1;grid-column:2}}
 </style>
+
+<style scoped>.invoice-customer-summary{display:flex;align-items:center;gap:12px;padding:8px 12px;background:#edf2f5;border-radius:6px;font-size:14px}.invoice-customer-summary span{color:#627683}.invoice-customer-summary strong{color:#304451}.manual-invoice>header p{font-size:13px}.manual-invoice .company{font-size:13px}</style>

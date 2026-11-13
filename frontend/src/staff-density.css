@@ -1,0 +1,91 @@
+/* Staff workspaces: readable type and compact controls. Public site/portal and
+   document/mail content retain their own typography. */
+.frame-work .page.crm {
+  --fs-body: 14px;
+  --fs-meta: 12px;
+  --fs-heading: 15px;
+  --lh-body: 1.35;
+  --lh-meta: 1.3;
+  font-family: "Figtree", "Segoe UI", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.35;
+  letter-spacing: normal;
+}
+.frame-work .page.crm :is(h1,h2,h3,h4):not(:where([contenteditable] *,.signature-preview-canvas *,.signature-design-canvas *)) { font-family: inherit; letter-spacing: normal; }
+.frame-work .page.crm h1:not(:where([contenteditable] *,.signature-preview-canvas *,.signature-design-canvas *)) { font-size: 23px; line-height: 1.25; }
+.frame-work .page.crm h2:not(:where([contenteditable] *,.signature-preview-canvas *,.signature-design-canvas *)) { font-size: 18px; line-height: 1.3; }
+.frame-work .page.crm button {
+  min-height: 32px;
+  font-size: 14px;
+  line-height: 1.25;
+  letter-spacing: normal;
+}
+.frame-work .page.crm a:not(:where([contenteditable] a,.signature-preview-canvas a,.signature-design-canvas a)) { min-height: 28px; letter-spacing: normal; }
+.frame-work .page.crm label { font-size: 13px; line-height: 1.3; letter-spacing: normal; }
+.frame-work .page.crm input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]):not([type="file"]),
+.frame-work .page.crm select {
+  min-height: 32px;
+  font-size: 14px;
+  line-height: 1.25;
+  letter-spacing: normal;
+}
+.frame-work .page.crm label:has(>input[type="checkbox"]) { min-height: 28px; gap: 6px; }
+.frame-work .page.crm :is(.eyebrow,.page-context,.hint,.help,.notice,.filters,.filter-row,.section-title,.panel-head) {
+  letter-spacing: normal;
+}
+.frame-work .page.crm table:not(:where([contenteditable] table,.signature-preview-canvas table,.signature-design-canvas table)) { font-variant-numeric: tabular-nums; }
+.frame-work .page.crm table:not(:where([contenteditable] table,.signature-preview-canvas table,.signature-design-canvas table)) :is(th,td) {
+  padding: 4px 8px;
+  font-size: 14px !important;
+  line-height: 20px;
+  letter-spacing: normal;
+  vertical-align: middle;
+}
+.frame-work .page.crm table:not(:where([contenteditable] table,.signature-preview-canvas table,.signature-design-canvas table)) thead th { font-size: 14px !important; font-weight: 700 !important; }
+.frame-work .page.crm table:not(:where([contenteditable] table,.signature-preview-canvas table,.signature-design-canvas table)) :is(button,a) { min-height: 26px; padding-block: 2px; font-size: 14px; line-height: 20px; }
+.frame-work .page.crm table:not(:where([contenteditable] table,.signature-preview-canvas table,.signature-design-canvas table)) :is(strong,b) { font-size: inherit; letter-spacing: normal; }
+.frame-work .page.crm table:not(:where([contenteditable] table,.signature-preview-canvas table,.signature-design-canvas table)) small { font-size: 12px; line-height: 16px; letter-spacing: normal; }
+.frame-work .page.crm table:not(:where([contenteditable] table,.signature-preview-canvas table,.signature-design-canvas table)) :is(input:not([type="checkbox"]),select) {
+  min-height: 28px !important;
+  height: 28px;
+  margin-top: 2px;
+  padding: 3px 6px !important;
+  font-size: 13px !important;
+  line-height: 20px;
+}
+.frame-work .page.crm :is(.status,.order-progress-pill,.payment-progress-pill,.customer-login-state) {
+  min-height: 22px;
+  padding: 2px 7px;
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: normal;
+}
+.frame-work .page.crm :is(.overview-order-link strong,.task-order>strong,.task-order>span,.mail-row-from,.mail-row strong) { font-size: 14px; }
+.frame-work .page.crm :is(.overview-order-link,.sort-heading) { letter-spacing: normal; }
+.frame-work .page.crm :is(.task-card small,.task-order>b,.mail-row small,.application-facts,.application-notes) { font-size: 12px; }
+.frame-work .page.crm .crm-bar { min-height: 28px; margin-bottom: 8px; padding-bottom: 6px; }
+.frame-work .page.crm .top-nav { min-height: 52px; padding-block: 5px; margin-bottom: 10px; }
+.frame-work .page.crm .top-nav>button { min-height: 36px; padding: 5px 9px; gap: 6px; font-size: 14px; }
+.frame-work .page.crm .top-nav .crm-brand { min-height: 36px; }
+.frame-work .page.crm :is(.dashboard-live,.profiles) { gap: 10px; }
+.frame-work .page.crm :is(.task-area,.finance-area,.profit-area,.customer-table-wrap) { padding: 10px 12px; }
+.frame-work .page.crm .task-order { min-height: 32px; padding-block: 4px; }
+/* Preserve tiny canvas handles and authored document/signature styling. */
+.frame-work .page.crm button.canvas-resize-handle { min-height: 12px; padding: 0; }
+.frame-work .page.crm .canvas-properties :is(input,select) { min-height: 30px; }
+.frame-work .page.crm .inline-canvas-text { font: inherit; }
+@media (max-width: 700px) {
+  .frame-work .page.crm .top-nav>button { min-height: 40px; }
+}
+
+/* Invoice list owns the remaining viewport; only its records scroll. */
+.frame-work:has(.accounting){height:100dvh;min-height:0;margin:0;padding-bottom:0}
+.frame-work .page.crm:has(.accounting){display:flex;flex-direction:column;height:100dvh;min-height:0;padding-bottom:10px;overflow:hidden}
+.frame-work .page.crm>.accounting{flex:1;min-height:0!important;overflow:hidden}
+.frame-work .page.crm>.accounting>.page-head,.frame-work .page.crm>.accounting>.tabs{flex:none}
+.frame-work .page.crm>.accounting>.panel{flex:1;min-height:0}
+
+.frame-work .page.crm :is(dt,.eyebrow){letter-spacing:normal;font-size:12px;line-height:1.3}
+.frame-work .page.crm .orders-overview-table col.col-status{width:150px}
+.frame-work .page.crm .orders-overview-table col.col-payment{width:150px}
+.frame-work .page.crm .orders-overview-table col.col-date,.frame-work .page.crm .orders-overview-table col.col-submitted{width:128px}

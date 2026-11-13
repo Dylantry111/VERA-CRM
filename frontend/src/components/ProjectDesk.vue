@@ -288,7 +288,7 @@ const orderProgressFilter = ref(String(route.query.status || ""));
 const paymentProgressFilter = ref(String(route.query.payment || ""));
 const bulkOrderStatus = ref("");
 const bulkPaymentStatus = ref("");
-const overviewFilters = reactive<Record<string, string>>({ order: '', customer: '', submitted: '', status: String(route.query.status || ''), payment: String(route.query.payment || ''), deposit: '', depositDate: '', balance: '', balanceDate: '', completed: '', eta: '', batch: '' });
+const overviewFilters = reactive<Record<string, string>>({ order: '', customer: String(route.query.customer_name || ''), submitted: '', status: String(route.query.status || ''), payment: String(route.query.payment || ''), deposit: '', depositDate: '', balance: '', balanceDate: '', completed: '', eta: '', batch: '' });
 const overviewSort = ref<{ key: string; direction: 1 | -1 }>({ key: 'submitted', direction: -1 });
 const picked = ref<string[]>([]);
 const invoicePick = ref<string[]>([]);
@@ -1054,6 +1054,7 @@ function settleSelected() {
     balanceRebatePick.value=[];
     balanceAdditionalItems.value=[];
     balanceInvoiceOpen.value=false;
+    await router.push({path:"/crm/finance",query:{invoice:invoice.id}});
   });
 }
 
