@@ -3826,6 +3826,8 @@ def register(app, s):
                                  'material': line.get('material') or product.get('material') or product.get('material_en')})
         try:
             raw = export_iswell({**d, 'lines': export_lines})
+        except FileNotFoundError as error:
+            raise HTTPException(503, 'The ISWELL workbook template is unavailable on the server') from error
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
         order_reference = re.sub(r'[^A-Za-z0-9_-]+', '-', str(d.get('order_number') or d.get('project_name') or oid)).strip('-')[:80]

@@ -5,6 +5,7 @@ import io
 import os
 import re
 import zipfile
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from excel_rules import column
@@ -229,8 +230,16 @@ def _regular_shutter_rows(project):
 
 def export_iswell(project):
     """Fill ISWELL's original Excel form while retaining its workbook package."""
-    template_path = os.path.join(os.path.dirname(__file__), 'templates', 'iswell_order_form.xlsx')
-    with open(template_path, 'rb') as source:
+    template_name = 'iswell_order_form.xlsx'
+    candidates = [
+        Path(__file__).resolve().parent / 'templates' / template_name,
+        Path.cwd() / 'templates' / template_name,
+        Path.cwd() / 'backend' / 'templates' / template_name,
+    ]
+    template = next((path for path in candidates if path.is_file()), None)
+    if template is None:
+        raise FileNotFoundError(f'ISWELL workbook template not found; checked: {", ".join(map(str, candidates))}')
+    with template.open('rb') as source:
         package_bytes = source.read()
 
     _xlsx_register_namespaces()
