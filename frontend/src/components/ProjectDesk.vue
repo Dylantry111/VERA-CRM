@@ -311,6 +311,8 @@ const templateForm = reactive({
 const mappingField = ref("");
 const mappingColumn = ref("");
 const orderProviderForm = reactive<Record<string, { provider_id: number; template_id: number }>>({});
+const savedOrderProvider = reactive<Record<string, number>>({});
+const supplierExportFeedback = ref<{ kind: 'loading' | 'success' | 'error'; text: string } | null>(null);
 function chooseProvider(orderId:string, providerId:number) {
   orderProviderForm[orderId]={provider_id:providerId,template_id:0};
 }
@@ -1280,6 +1282,7 @@ async function downloadResponseFile(response: Response, fallbackName: string) {
 }
 
 async function exportSupplierOrder(orderId: string) {
+  supplierExportFeedback.value = { kind: 'loading', text: tx('正在生成并下载供应商下单表…','Generating and downloading supplier order form…') };
   await act(async () => {
     const form = orderProviderForm[orderId];
     const providerId = form?.provider_id || 0;
@@ -1293,22 +1296,32 @@ async function exportSupplierOrder(orderId: string) {
     if (!providerSupportsOrderForm(providerId)) {
       throw new Error(tx('请选择已启用的 ISWELL 供应商，当前只有它的原始 Excel 下单表已接入。','Choose an active ISWELL supplier. Its original Excel order form is the only supplier form currently connected.'));
     }
-    await request(`operations/orders/${orderId}/assign-provider`, { provider_id: providerId, template_id: null, is_preferred: true });
+    if (savedOrderProvider[orderId] !== providerId) {
+      await request(`operations/orders/${orderId}/assign-provider`, { provider_id: providerId, template_id: null, is_preferred: true });
+      savedOrderProvider[orderId] = providerId;
+    }
     const response = await fetch(`/api/operations/orders/${orderId}/supplier-export?provider_id=${encodeURIComponent(providerId)}`, {
       headers: session.token ? { Authorization: `Bearer ${session.token}` } : {},
     });
     await downloadResponseFile(response, `iswell-order-${orderId}.xlsx`);
     notice.value = tx('已生成并下载 ISWELL 原始下单表。实际向工厂下单后，再点击“记录已向供应商下单”。','Generated and downloaded the original ISWELL order form. After placing the factory order, record it as ordered with the supplier.');
   });
+  supplierExportFeedback.value = error.value
+    ? { kind: 'error', text: tx(`生成失败：${error.value}`, `Could not generate supplier order form: ${error.value}`) }
+    : { kind: 'success', text: notice.value || tx('下单表已生成并开始下载。','The supplier order form was generated and download started.') };
 }
 
 async function exportPickedSupplierOrders() {
+  supplierExportFeedback.value = { kind: 'loading', text: tx('正在生成所选订单的下单表…','Generating supplier forms for selected orders…') };
   await act(async () => {
     if (pickedSupplierExportIssue.value) throw new Error(pickedSupplierExportIssue.value);
     const targets = [...pickedSupplierOrders.value];
     for (const order of targets) {
       const providerId = orderProviderForm[order.id].provider_id;
-      await request(`operations/orders/${order.id}/assign-provider`, { provider_id: providerId, template_id: null, is_preferred: true });
+      if (savedOrderProvider[order.id] !== providerId) {
+        await request(`operations/orders/${order.id}/assign-provider`, { provider_id: providerId, template_id: null, is_preferred: true });
+        savedOrderProvider[order.id] = providerId;
+      }
     }
     const response = await fetch('/api/operations/orders/supplier-export-batch', {
       method: 'POST',
@@ -1321,6 +1334,9 @@ async function exportPickedSupplierOrders() {
     await downloadResponseFile(response, 'iswell-supplier-orders.zip');
     notice.value = tx(`已生成并下载 ${targets.length} 份 ISWELL 原始下单表。`, `Generated and downloaded ${targets.length} original ISWELL order form(s).`);
   });
+  supplierExportFeedback.value = error.value
+    ? { kind: 'error', text: tx(`生成失败：${error.value}`, `Could not generate supplier forms: ${error.value}`) }
+    : { kind: 'success', text: notice.value || tx('下单表已生成并开始下载。','The supplier forms were generated and download started.') };
 }
 
 async function loadOrderProviders(orderId: string) {
@@ -1328,6 +1344,7 @@ async function loadOrderProviders(orderId: string) {
     const assigned = await request<OrderProvider[]>(`operations/orders/${orderId}/providers`);
     if (assigned.length > 0) {
       const first = assigned[0];
+      savedOrderProvider[orderId] = first.provider_id;
       orderProviderForm[orderId] = {
         provider_id: first.provider_id,
         template_id: first.template_id || 0,
@@ -1392,7 +1409,7 @@ async function loadOrderProviders(orderId: string) {
       </aside>
 
       <div class="detail-panel">
-        <div v-if="workspace === 'projects' && picked.length" class="card batch-toolbar"><strong>{{ tx('已选', 'Selected') }} {{ picked.length }}</strong><button class="supplier-export-primary" :disabled="busy || !!pickedSupplierExportIssue" @click="exportPickedSupplierOrders">{{ tx('生成并下载供应商下单表','Generate & download supplier forms') }}</button><button class="secondary" @click="picked = []">{{ tx('取消选择','Clear selection') }}</button><p v-if="pickedSupplierExportIssue" class="hint">{{ pickedSupplierExportIssue }}</p></div>
+        <div v-if="workspace === 'projects' && picked.length" class="card batch-toolbar"><strong>{{ tx('已选', 'Selected') }} {{ picked.length }}</strong><button class="supplier-export-primary" :disabled="busy || !!pickedSupplierExportIssue" @click="exportPickedSupplierOrders">{{ tx('生成并下载供应商下单表','Generate & download supplier forms') }}</button><button class="secondary" @click="picked = []">{{ tx('取消选择','Clear selection') }}</button><p v-if="pickedSupplierExportIssue" class="hint">{{ pickedSupplierExportIssue }}</p><p v-if="supplierExportFeedback" class="supplier-export-feedback" :class="`is-${supplierExportFeedback.kind}`" role="status">{{ supplierExportFeedback.text }}</p></div>
 
         <div class="section-content">
           <section v-if="activeSection === 'operations'" class="card section-card">
@@ -1504,6 +1521,7 @@ async function loadOrderProviders(orderId: string) {
                 <div class="form-row supplier-form-actions">
                   <button type="button" class="supplier-export-primary" :disabled="busy || !selectedSupplierFormReady" @click="exportSupplierOrder(selectedOrder.id)">{{ tx('生成并下载供应商下单表','Generate & download supplier order form') }}</button>
                 </div>
+                <p v-if="supplierExportFeedback" class="supplier-export-feedback" :class="`is-${supplierExportFeedback.kind}`" role="status">{{ supplierExportFeedback.text }}</p>
               </div>
               <div v-if="selectedOrder.status==='accepted' && ['deposit_received','paid'].includes(selectedOrder.payment_status)" class="actions supplier-order-record"><button type="button" :disabled="busy" @click="supplier(selectedOrder)">{{ tx('记录已向供应商下单','Record placed with supplier') }}</button></div>
               <div v-else-if="selectedOrder.status==='supplier_ordered' || selectedOrder.status==='in_transit'" class="shipment-workflow-note"><strong>{{ tx('下一步在 Shipment 完成','Continue under Shipment') }}</strong><p>{{ nextOrderHint }}</p><RouterLink class="button-link" to="/crm/shipments">{{ tx('打开 Shipment','Open Shipment') }} →</RouterLink></div>
@@ -1866,6 +1884,7 @@ async function loadOrderProviders(orderId: string) {
           <button type="button" class="secondary" :disabled="busy || !picked.length" @click="openBalanceInvoiceForPicked">{{ tx('生成尾款账单','Create balance invoice') }}</button>
           <button type="button" class="supplier-export-primary" :disabled="busy || !picked.length || !!pickedSupplierExportIssue" @click="exportPickedSupplierOrders">{{ tx('生成并下载供应商下单表','Generate & download supplier forms') }}</button>
           <small v-if="pickedSupplierExportIssue" class="supplier-export-issue">{{ pickedSupplierExportIssue }}</small>
+          <small v-if="supplierExportFeedback" class="supplier-export-feedback" :class="`is-${supplierExportFeedback.kind}`" role="status">{{ supplierExportFeedback.text }}</small>
         </div>
       </div>
       <div class="overview-scroll"><table class="orders-overview-table"><colgroup><col class="col-select"/><col class="col-order-id"/><col class="col-customer"/><col class="col-submitted"/><col class="col-status"/><col class="col-payment"/><col class="col-money"/><col class="col-date"/><col class="col-money"/><col class="col-date"/><col class="col-date"/><col class="col-date"/><col class="col-batch"/></colgroup><thead>
@@ -2225,7 +2244,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .global-workspace .workspace-grid{grid-template-columns:minmax(0,1fr)}
 .global-workspace .detail-panel{width:100%;min-width:0}.global-workspace .section-card{max-width:1200px;margin:0 auto}
 .template-card,.template-status{overflow-wrap:anywhere}.checkbox-label{display:flex;align-items:center;gap:8px;min-height:44px}.checkbox-label input[type=checkbox]{width:20px;height:20px;min-height:20px;flex:none}
-.batch-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px}.batch-toolbar button,.global-workspace button{min-height:44px}.supplier-export-primary{background:#465966!important;color:#fff!important;border:1px solid #465966!important;border-radius:999px!important;font-weight:750!important;padding-inline:18px!important;box-shadow:0 2px 5px #24374622}.supplier-export-primary:hover:not(:disabled){background:#354956!important;color:#fff!important}.supplier-export-primary:disabled{opacity:.48;cursor:not-allowed}.supplier-form-actions{margin-top:12px}.supplier-order-record{margin-top:12px}.shipment-workflow-note{margin-top:12px;padding:14px;background:#f1f5f7;border:1px solid #d3dee4;border-radius:8px}.shipment-workflow-note p{margin:6px 0 10px}.shipment-workflow-note .button-link{display:inline-flex;align-items:center;min-height:38px}.supplier-export-issue{flex-basis:100%;color:#8e4e26}.batch-toolbar .hint{flex-basis:100%;margin:0}.finance-order{display:flex;flex-wrap:wrap;gap:12px;align-items:center;border-bottom:1px solid #e1e6df;padding:8px 0}.finance-order label{margin:0}.highlight{border:2px solid #17523a}.global-workspace a{color:#17523a;text-decoration:underline}.global-workspace select{max-width:100%}
+.batch-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px}.batch-toolbar button,.global-workspace button{min-height:44px}.supplier-export-primary{background:#465966!important;color:#fff!important;border:1px solid #465966!important;border-radius:999px!important;font-weight:750!important;padding-inline:18px!important;box-shadow:0 2px 5px #24374622}.supplier-export-primary:hover:not(:disabled){background:#354956!important;color:#fff!important}.supplier-export-primary:disabled{opacity:.48;cursor:not-allowed}.supplier-form-actions{margin-top:12px}.supplier-order-record{margin-top:12px}.shipment-workflow-note{margin-top:12px;padding:14px;background:#f1f5f7;border:1px solid #d3dee4;border-radius:8px}.shipment-workflow-note p{margin:6px 0 10px}.shipment-workflow-note .button-link{display:inline-flex;align-items:center;min-height:38px}.supplier-export-issue{flex-basis:100%;color:#8e4e26}.supplier-export-feedback{flex-basis:100%;margin:0;font-weight:650}.supplier-export-feedback.is-loading{color:#465966}.supplier-export-feedback.is-success{color:#176a4b}.supplier-export-feedback.is-error{color:#a33b32}.batch-toolbar .hint{flex-basis:100%;margin:0}.finance-order{display:flex;flex-wrap:wrap;gap:12px;align-items:center;border-bottom:1px solid #e1e6df;padding:8px 0}.finance-order label{margin:0}.highlight{border:2px solid #17523a}.global-workspace a{color:#17523a;text-decoration:underline}.global-workspace select{max-width:100%}
 @media(max-width:700px){.global-workspace .section-card{padding:12px}.global-workspace .form-grid{grid-template-columns:minmax(0,1fr)}.global-workspace .mapping-controls{display:flex;flex-wrap:wrap}.global-workspace .mapping-controls>*{min-width:0;max-width:100%}.finance-order{display:block}}
 .global-workspace .template-card{padding:14px;margin-top:12px}.global-workspace .template-card h3,.global-workspace .template-card h4{margin:8px 0}.global-workspace .template-card p{margin:6px 0}.resource-orders{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 16px}.resource-orders p{margin:0!important}.resource-orders a{min-height:44px}.pick-mark{min-width:44px;min-height:44px}.global-workspace .template-card>.checkbox-label{display:inline-flex;margin-right:20px}@media(max-width:700px){.resource-orders{grid-template-columns:minmax(0,1fr)}}
 .desk .order-pick{grid-template-columns:minmax(0,1fr);justify-content:stretch;justify-items:stretch;text-align:left;min-height:44px}

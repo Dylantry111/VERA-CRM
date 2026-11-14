@@ -87,7 +87,11 @@ def connect(sqlite_path):
     global _pool
     with _pool_lock:
         if _pool is None:
-            _pool=ConnectionPool(connection_url(),min_size=0,max_size=6,timeout=20,max_idle=60,max_lifetime=600,check=ConnectionPool.check_connection,kwargs={'connect_timeout':15,'prepare_threshold':None,'row_factory':dict_row},name='vera',open=True)
+            # Vercel may keep several Python instances warm at once. A six-
+            # connection pool per instance can exhaust the shared Postgres
+            # connection limit during normal parallel page loads.
+            pool_max_size = max(1, min(4, int(os.getenv('VERA_DB_POOL_MAX_SIZE', '2'))))
+            _pool=ConnectionPool(connection_url(),min_size=0,max_size=pool_max_size,timeout=20,max_idle=20,max_lifetime=300,check=ConnectionPool.check_connection,kwargs={'connect_timeout':15,'prepare_threshold':None,'row_factory':dict_row},name='vera',open=True)
     try:
         with _pool.connection() as con:
             con.execute(sql.SQL('SET LOCAL search_path TO {}, pg_temp').format(sql.Identifier(SCHEMA)))
