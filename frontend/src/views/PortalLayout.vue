@@ -84,7 +84,7 @@ async function setFirstPassword() {
     <div v-if="!profile && !loading" class="login-view">
       <div class="login-card">
         <h1>{{ tx("客户门户", "Customer Portal") }}</h1>
-        <p>{{ tx("配置订单，提交待审核。", "Configure orders and submit for review.") }}</p>
+        <p>{{ tx("配置订单，提交产品参数核对。", "Configure orders and submit product details for a technical check.") }}</p>
         <form @submit.prevent="login">
           <label>
             {{ tx("账号", "Account") }}

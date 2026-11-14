@@ -263,7 +263,7 @@ function messageOf(cause: unknown) {
   <main class="portal">
     <header class="portal-head">
       <p class="section-label">{{ tx("客户门户", "CUSTOMER PORTAL") }}</p>
-      <h1>{{ tx("配置订单，提交待审核。", "Configure a project, then submit it for review.") }}</h1>
+      <h1>{{ tx("配置订单，提交产品参数核对。", "Configure an order and submit product details for a technical check.") }}</h1>
       <p>{{ tx("一个客户一个登录、一个联系人。公司地址和本单施工地址分开。没有确认价格表时可以保存订单，但合计为空，不能当作报价。", "One customer, one login, one contact. The company address and this order’s site address stay separate. A project can be saved without a confirmed price list, but its total stays empty and is not a quotation.") }}</p>
     </header>
 
@@ -355,9 +355,9 @@ function messageOf(cause: unknown) {
           <p>{{ tx("行价和合计都来自服务端。尺寸或选项一变，旧金额立刻清掉。页面不自己乘面积，也不接受手填单价。", "Line prices and the total come from the server. Changing a size or option clears the previous amount at once. This page does not multiply an area or accept a typed unit price.") }}</p>
         </aside>
         
-        <p class="section-label" style="margin-top: 40px;">{{ tx("步骤 4 · 提交待审核", "STEP 4 · SUBMIT FOR REVIEW") }}</p>
-        <button :disabled="busy">{{ tx("提交待审核", "Submit for review") }}</button>
-        <p class="hint">{{ tx("提交不生成发票。确认接收之后才有订单金额 60% 的定金发票；定金已收是后台另一步。发票金额以后端计算为准。", "Submission does not create an invoice. Acceptance creates a deposit invoice for 60% of the order. Recording the deposit received is a separate staff step. The invoice amount is calculated on the server.") }}</p>
+        <p class="section-label" style="margin-top: 40px;">{{ tx("步骤 4 · 提交产品参数核对", "STEP 4 · SUBMIT FOR TECHNICAL CHECK") }}</p>
+        <button :disabled="busy">{{ tx("提交订单信息", "Submit order details") }}</button>
+        <p class="hint">{{ tx("提交后 VERA 会核对产品技术参数和尺寸，并联系你澄清需要修正的信息。参数确认后提供定金账单。", "After submission, VERA checks product specifications and dimensions, and will contact you if anything needs clarification. A deposit invoice follows once the details are confirmed.") }}</p>
         <p v-if="error" class="alert" role="alert">{{ error }}</p>
         <p v-if="notice" role="status">{{ notice }}</p>
       </form>

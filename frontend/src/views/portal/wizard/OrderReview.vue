@@ -57,9 +57,9 @@ function describeSelectedAddons(options: Record<string,string>, locale: string):
 <template>
   <div class="review-step">
     <div class="step-intro">
-      <p class="section-label">{{ tx("步骤 4 · 核对并提交", "STEP 4 · REVIEW & SUBMIT") }}</p>
-      <h2>{{ tx("核对订单", "Review Order") }}</h2>
-      <p>{{ tx("请仔细核对所有信息。提交后订单将进入待审核状态。", "Please review all information carefully. After submission, the order will enter review status.") }}</p>
+      <p class="section-label">{{ tx("步骤 4 · 核对并提交", "STEP 4 · CHECK & SUBMIT") }}</p>
+      <h2>{{ tx("核对订单", "Check Order Details") }}</h2>
+      <p>{{ tx("请仔细核对信息。提交后，VERA 会检查产品技术参数和尺寸是否有误或需要澄清。", "Please check the details carefully. After submission, VERA checks the product specifications and dimensions for errors or clarification.") }}</p>
     </div>
 
     <div class="review-sections">
@@ -92,11 +92,11 @@ function describeSelectedAddons(options: Record<string,string>, locale: string):
 
       <div class="review-card">
         <h3>{{ tx("提交确认", "Submission Confirmation") }}</h3>
-        <p class="terms-text">{{ tx("订单号将由系统按客户类型自动生成。提交后先由 VERA 管理员核对并确认；确认前不会显示给客户。", "The system generates an order number from your customer type. A VERA admin will review and confirm it after submission; it will not be shown to you before then.") }}</p>
+        <p class="terms-text">{{ tx("订单号将由系统按客户类型自动生成。VERA 的确认用于核对产品技术参数，不是审核客户是否可以下单。", "The system generates an order number from your customer type. VERA confirms the product technical details; this is not an eligibility check on whether you may place an order.") }}</p>
         <p class="terms-text">
           {{ tx(
-            "我已核对尺寸，提交后由 VERA 审核并开 60% 定金发票。",
-            "I have verified the dimensions. After submission, VERA will review and issue a 60% deposit invoice."
+            "我已核对尺寸。提交后，VERA 会检查产品技术参数；确认后会提供定金账单。",
+            "I have checked the dimensions. VERA will check the product specifications after submission; a deposit invoice follows once the details are confirmed."
           ) }}
         </p>
       </div>
@@ -116,7 +116,7 @@ function describeSelectedAddons(options: Record<string,string>, locale: string):
         {{ tx("上一步", "Previous") }}
       </button>
       <button type="button" class="primary" :disabled="!canSubmit" @click="emit('submit')">
-        {{ saving ? tx("提交中...", "Submitting...") : tx("提交待审核", "Submit for Review") }}
+        {{ saving ? tx("提交中...", "Submitting...") : tx("提交订单信息", "Submit Order Details") }}
       </button>
     </div>
   </div>
