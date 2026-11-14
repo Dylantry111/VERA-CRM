@@ -21,7 +21,7 @@ const quoteLoading = ref(false);
 const quoteError = ref("");
 const draftKey = ref("");
 const lastSaved = ref("");
-const draft = reactive({ project_name: "", site_address: "", installation_required: false, windows: [] as any[] });
+const draft = reactive({ project_name: "", end_customer_name: "", site_address: "", installation_required: false, windows: [] as any[] });
 
 const shutterProducts = computed(() => catalog.value.filter(p => p.category === "shutters" && p.orderable));
 const product = (id: number | "") => catalog.value.find(p => Number(p.id) === Number(id));
@@ -148,7 +148,7 @@ async function refreshQuote() {
     if (ticket === quoteTicket) quoteLoading.value = false;
   }
 }
-watch([() => draft.windows, () => draft.installation_required, () => draft.project_name, () => draft.site_address], () => {
+watch([() => draft.windows, () => draft.installation_required, () => draft.project_name, () => draft.end_customer_name, () => draft.site_address], () => {
   if (quoteTimer) clearTimeout(quoteTimer);
   quoteTimer = setTimeout(() => void refreshQuote(), 350);
 }, { deep: true });
@@ -248,7 +248,7 @@ async function submit() {
   saving.value = true;
   try {
     const saved = await portalRequest<any>("orders", {
-      project_name: draft.project_name.trim(), site_address: draft.installation_required ? draft.site_address.trim() : "",
+      project_name: draft.project_name.trim(), end_customer_name: draft.end_customer_name.trim(), site_address: draft.installation_required ? draft.site_address.trim() : "",
       installation_required: draft.installation_required, submission_key: crypto.randomUUID(),
       // Each spreadsheet row is one window; the customer template has no repeated-window quantity input.
       lines: draft.windows.map(w => ({ window_name: w.window_name.trim(), product_id: Number(w.product_id), width_mm: w.width_mm, height_mm: w.height_mm, quantity: 1, panel_count: Number(w.panel_count) || 1, options: w.options })),
@@ -272,6 +272,7 @@ load();
     <template v-else>
       <section class="order-fields">
         <label class="order-id-field"><span class="field-label">{{ tx("订单编号", "Order ID") }}</span><input class="required-input" v-model="draft.project_name" maxlength="20" :placeholder="tx('最多 20 个字符', 'Up to 20 characters')" /><small class="field-hint">{{ draft.project_name.length }}/20 · {{ tx("请使用唯一编号", "Use a unique ID") }}</small></label>
+        <label class="address-field"><span class="field-label">{{ tx("终端客户姓名", "End customer name") }} · {{ tx("选填", "Optional") }}</span><input v-model="draft.end_customer_name" maxlength="200" :placeholder="tx('如适用，填写零售客户姓名', 'Retail customer name, if applicable')" /><small class="field-hint">&nbsp;</small></label>
         <label v-if="draft.installation_required" class="address-field"><span class="field-label">{{ tx("施工地址", "Installation address") }}</span><input class="required-input" v-model="draft.site_address" maxlength="1000" required /><small class="field-hint">&nbsp;</small></label>
         <label v-else class="address-field address-optional"><span class="field-label">{{ tx("施工地址", "Installation address") }} · {{ tx("仅安装时填写", "Only needed for installation") }}</span><input v-model="draft.site_address" maxlength="1000" :placeholder="tx('无需安装可留空', 'Leave blank for supply-only orders')" /><small class="field-hint">{{ tx("选择安装后，此项变为必填。", "Required when installation is selected.") }}</small></label>
         <section class="install-mode-field" :aria-label="tx('订单类型','Order type')">
@@ -368,7 +369,7 @@ load();
 @media(max-width:760px){.price-summary{position:static}.price-summary dl{gap:6px 16px}}
 .quote-total{padding:9px 11px;border-radius:5px;background:#edf5ef;color:#17523a;font-weight:650}.quote-error{font-size:12px;color:#8f3425}
 .table-wrap td:nth-child(3) input,.table-wrap td:nth-child(4) input{width:76px}.table-wrap td:nth-child(7) input{width:64px}.table-wrap td:nth-child(8) input,.table-wrap td:nth-child(9) input,.table-wrap td:nth-child(10) input,.table-wrap td:nth-child(11) input{width:72px}.field-hint{font-size:11px;color:#718078;font-weight:400}
-.order-fields{grid-template-columns:minmax(230px,.9fr) minmax(320px,1.6fr) auto;gap:18px}
+.order-fields{grid-template-columns:minmax(180px,.8fr) minmax(190px,1fr) minmax(250px,1.4fr) auto;gap:18px}
 .order-fields label:not(.install-check){grid-template-rows:18px 40px 15px;align-content:start;gap:6px}
 .field-label{height:18px;line-height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .install-check{align-self:end}
@@ -377,6 +378,7 @@ load();
 .add-window-row:active{background:#1f303b;transform:translateY(0);box-shadow:inset 0 2px 4px rgba(0,0,0,.18)}
 .required-input{background:#e8eef0!important;border-color:#8a9ca5!important;box-shadow:inset 0 0 0 1px rgba(53,69,82,.08)}
 .required-input:focus{outline:2px solid #354552;outline-offset:1px}
+@media(max-width:1100px){.order-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:760px){.order-fields{grid-template-columns:1fr}}
 .install-mode-field{display:grid;grid-template-rows:18px 40px 15px;align-content:start;gap:6px;min-width:112px}
 .install-mode{height:40px;display:grid;grid-template-rows:1fr 1fr;overflow:hidden;border:1px solid #9aabb3;border-radius:999px;background:#fff}

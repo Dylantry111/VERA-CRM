@@ -757,6 +757,7 @@ class Window(Input):
 
 class Project(Input):
     project_name: str = Field(min_length=1, max_length=200)
+    end_customer_name: str = Field(default='', max_length=200)
     site_address: str = Field(default='', max_length=1000)
     lines: list[Window] = Field(min_length=1, max_length=200)
     submission_key: str = Field(min_length=8, max_length=100)
@@ -772,6 +773,7 @@ class Project(Input):
 
 class StaffOrder(Input):
     project_name: str = Field(min_length=1, max_length=200)
+    end_customer_name: str = Field(default='', max_length=200)
     site_address: str = Field(default='', max_length=1000)
     lines: list[Window] = Field(min_length=1, max_length=200)
     submission_key: str = Field(min_length=8, max_length=100)
@@ -849,6 +851,10 @@ class Adjustments(Input):
 
 class OrderNumberEdit(Input):
     order_number: str = Field(min_length=1, max_length=200)
+
+
+class EndCustomerNameEdit(Input):
+    end_customer_name: str = Field(default='', max_length=200)
 
 
 class OrderReview(Input):
@@ -2335,7 +2341,7 @@ def register(app, s):
                    'order_number_confirmed':bool(item.historical_confirmed_deposit_date),'customer_id':item.customer_id,'company':customer['company'],
                    'customer_type':customer.get('customer_type') or 'wholesale','contact_name':customer['contact_name'],
                    'email':customer['email'],'phone':customer['phone'],'company_address':customer['company_address'],
-                   'project_name':payload.project_name,'site_address':payload.site_address,
+                   'project_name':payload.project_name,'end_customer_name':payload.end_customer_name.strip(),'site_address':payload.site_address,
                    'status':'accepted' if item.historical_confirmed_deposit_date else ('pending_review' if item.submit else 'draft'),
                    'payment_status':'deposit_received' if item.historical_confirmed_deposit_date else 'deposit_unpaid',
                    'history':[],'created_at':s.now(),'order_date':None,'request_hash':digest,
@@ -3456,7 +3462,7 @@ def register(app, s):
             d = {**calculate(c, body), 'id': oid, 'order_number': assign_business_number(c, p, body.project_name), 'order_number_confirmed':False, 'customer_id': cid, 'company': p['company'],
                  'customer_type': p.get('customer_type') or 'wholesale',
                  'contact_name': p['contact_name'], 'email': p['email'], 'phone': p['phone'],
-                 'company_address': p['company_address'], 'project_name': body.project_name, 'site_address': body.site_address,
+                 'company_address': p['company_address'], 'project_name': body.project_name, 'end_customer_name': body.end_customer_name.strip(), 'site_address': body.site_address,
           'status': 'pending_review', 'payment_status': 'deposit_unpaid', 'history': [], 'created_at': s.now(), 'order_date': None,
                  'request_hash': bodyhash(body),'installation_required':body.installation_required,'adjustments':{}}
             d['lead_time'] = lead_time_for(d['lines'])
@@ -3732,6 +3738,19 @@ def register(app, s):
             put(c, 'project', d, d['customer_id'])
             return enrich(c, d)
 
+    @app.post('/api/operations/orders/{oid}/end-customer')
+    def edit_end_customer_name(oid: str, body: EndCustomerNameEdit, actor=Depends(s.require_admin)):
+        with s.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            d = get(c, oid, 'project')
+            value = body.end_customer_name.strip()
+            previous = d.get('end_customer_name', '')
+            if previous != value:
+                d['end_customer_name'] = value
+                event(d, 'end_customer_name_updated', actor, previous=previous, end_customer_name=value)
+                put(c, 'project', d, d['customer_id'])
+            return enrich(c, d)
+
     @app.post('/api/operations/orders/{oid}/adjust')
     def adjust(oid:str,body:Adjustments,actor=Depends(s.auth)):
         with s.db() as c:
@@ -3795,7 +3814,7 @@ def register(app, s):
 
     def build_supplier_export(c, oid, provider_id=None):
         import json
-        from supplier_exports import export_iswell
+        from supplier_exports import export_vera_purchase_order
         d = get(c, oid, 'project')
         if d.get('status') in ('draft', 'pending_review'):
             raise HTTPException(409, f"{d.get('order_number') or oid}: accept the order review before generating the supplier order form")
@@ -3814,8 +3833,6 @@ def register(app, s):
             raise HTTPException(409, f"{d.get('order_number') or oid}: assign a supplier before generating its order form")
         if not provider['active']:
             raise HTTPException(409, f"{d.get('order_number') or oid}: the assigned supplier is inactive")
-        if 'iswell' not in str(provider['name']).lower():
-            raise HTTPException(409, f"{d.get('order_number') or oid}: no original Excel order form is connected for {provider['name']}; the generic VERA sheet is not used")
         products = {row['id']: json.loads(row['data']) for row in c.execute('SELECT id,data FROM products')}
         export_lines = []
         for line in d.get('lines') or []:
@@ -3825,20 +3842,18 @@ def register(app, s):
                                  'product_name': product.get('name_en'),
                                  'material': line.get('material') or product.get('material') or product.get('material_en')})
         try:
-            raw = export_iswell({**d, 'lines': export_lines})
-        except FileNotFoundError as error:
-            raise HTTPException(503, 'The ISWELL workbook template is unavailable on the server') from error
+            raw = export_vera_purchase_order({**d, 'lines': export_lines})
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
         order_reference = re.sub(r'[^A-Za-z0-9_-]+', '-', str(d.get('order_number') or d.get('project_name') or oid)).strip('-')[:80]
-        return d, provider, raw, f'iswell-order-{order_reference}.xlsx'
+        return d, provider, raw, f'vera-order-{order_reference}.xlsx'
 
     @app.get('/api/operations/orders/{oid}/supplier-export')
     def supplier_export(oid: str, provider_id: int | None = None, actor=Depends(s.auth)):
         from fastapi.responses import Response
         with s.db() as c:
             d, provider, raw, filename = build_supplier_export(c, oid, provider_id)
-            event(d, 'supplier_exported', actor, format='ISWELL original form', provider_id=provider['id'])
+            event(d, 'supplier_exported', actor, format='VERA purchase order', provider_id=provider['id'])
             put(c, 'project', d, d['customer_id'])
         return Response(raw, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                         headers={'Content-Disposition': f'attachment; filename="{filename}"', 'Cache-Control': 'no-store'})
@@ -3871,10 +3886,10 @@ def register(app, s):
                     used_names.add(name)
                     bundle.writestr(name, raw)
             for d, provider, _raw, _filename in exports:
-                event(d, 'supplier_exported', actor, format='ISWELL original form', provider_id=provider['id'], batch=True)
+                event(d, 'supplier_exported', actor, format='VERA purchase order', provider_id=provider['id'], batch=True)
                 put(c, 'project', d, d['customer_id'])
         return Response(archive.getvalue(), media_type='application/zip',
-                        headers={'Content-Disposition': 'attachment; filename="iswell-supplier-orders.zip"', 'Cache-Control': 'no-store'})
+                        headers={'Content-Disposition': 'attachment; filename="vera-purchase-orders.zip"', 'Cache-Control': 'no-store'})
     def project_export(oid,kind):
         from fastapi.responses import Response
         from order_exports import export_project

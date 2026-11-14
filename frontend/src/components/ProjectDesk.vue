@@ -119,6 +119,7 @@ interface ProjectOrder {
   phone?: string;
   email?: string;
   company_address?: string;
+  end_customer_name?: string;
   customer_type?: 'retail' | 'wholesale';
   project_name: string;
   site_address: string;
@@ -317,7 +318,7 @@ function chooseProvider(orderId:string, providerId:number) {
   orderProviderForm[orderId]={provider_id:providerId,template_id:0};
 }
 function providerSupportsOrderForm(providerId:number) {
-  return providers.value.some(provider => provider.id === providerId && provider.active && provider.name.toLowerCase().includes('iswell'));
+  return providers.value.some(provider => provider.id === providerId && provider.active);
 }
 const activeSection = computed(() => (({pricing:'pricing',providers:'providers',finance:'settlement'} as Record<string,string>)[props.workspace] || 'operations'));
 const validFields = ["order_number", "order_id", "project_name", "company", "contact_name", "company_address", "site_address", "phone", "email", "window_name", "product_id", "width_mm", "height_mm", "quantity", "panel_count", "options", "arrived", "delivered"];
@@ -374,6 +375,7 @@ const pageCount = computed(() => Math.max(1, Math.ceil(visibleOrders.value.lengt
 const pageOrders = computed(() => visibleOrders.value.slice(Math.min(listPage.value, pageCount.value - 1) * 6, (Math.min(listPage.value, pageCount.value - 1) + 1) * 6));
 const selectedId = ref(String(route.query.order || ''));
 const detailSection = ref("order");
+const endCustomerNameDraft = ref('');
 const selectedOrder = computed(() => visibleOrders.value.find((order) => order.id === selectedId.value) || visibleOrders.value[0] || null);
 const selectedIsWholesale = computed(() => selectedOrder.value?.customer_type === 'wholesale' ||
   (!selectedOrder.value?.customer_type && customers.value.find(c => c.customer_id === selectedOrder.value?.customer_id)?.customer_type !== 'retail'));
@@ -392,8 +394,6 @@ const pickedSupplierExportIssue = computed(() => {
   if (unpaid.length) return tx(`有 ${unpaid.length} 个订单尚未确认收到定金。`, `${unpaid.length} selected order(s) do not have a confirmed deposit.`);
   const unassigned = pickedSupplierOrders.value.filter(order => !orderProviderForm[order.id]?.provider_id);
   if (unassigned.length) return tx(`有 ${unassigned.length} 个订单尚未选择供应商。请先在订单详情中选择供应商。`, `${unassigned.length} selected order(s) have no supplier. Choose a supplier in each order's details first.`);
-  const unsupported = pickedSupplierOrders.value.filter(order => !providerSupportsOrderForm(orderProviderForm[order.id]?.provider_id || 0));
-  if (unsupported.length) return tx(`目前只有 ISWELL 原始 Excel 模板已接入；另有 ${unsupported.length} 个订单的供应商没有可用模板。`, `Only the ISWELL original Excel form is connected; ${unsupported.length} selected order(s) use a supplier without a connected form.`);
   return '';
 });
 function quoteMoney(amount?: string | null, currency = "NZD") {
@@ -411,7 +411,7 @@ function quoteBalance(order: ProjectOrder) {
   const amount = Number(order.total) - Number(order.deposit);
   return Number.isFinite(amount) ? quoteMoney(amount.toFixed(2), order.currency || "NZD") : "—";
 }
-watch(()=>selectedOrder.value?.id,()=>{if(props.workspace==='projects') invoicePick.value=[];fulfilError.value=''});
+watch(()=>selectedOrder.value?.id,()=>{if(props.workspace==='projects') invoicePick.value=[];fulfilError.value='';endCustomerNameDraft.value=selectedOrder.value?.end_customer_name || ''});
 watch(invoicePick,()=>{mailPreview.value=null});
 watch(picked, () => {
   // Refresh the generated text for a new selection, but never overwrite wording the user changed.
@@ -684,6 +684,13 @@ function supplier(order: ProjectOrder) {
 
 function toggleOrder(id: string) {
   picked.value = picked.value.includes(id) ? picked.value.filter((item) => item !== id) : [...picked.value, id];
+}
+async function saveEndCustomerName() {
+  if (!selectedOrder.value) return;
+  await act(async () => {
+    await request(`operations/orders/${selectedOrder.value!.id}/end-customer`, { end_customer_name: endCustomerNameDraft.value.trim() });
+    notice.value = tx('已保存终端客户姓名。', 'End customer name saved.');
+  });
 }
 function toggleAllVisibleOrders(checked: boolean) {
   const ids = visibleOrders.value.map(order => order.id);
@@ -1294,7 +1301,7 @@ async function exportSupplierOrder(orderId: string) {
       throw new Error(tx('确认收到定金后，才能生成供应商下单表。','Confirm the deposit before generating its supplier form.'));
     }
     if (!providerSupportsOrderForm(providerId)) {
-      throw new Error(tx('请选择已启用的 ISWELL 供应商，当前只有它的原始 Excel 下单表已接入。','Choose an active ISWELL supplier. Its original Excel order form is the only supplier form currently connected.'));
+      throw new Error(tx('请选择一个已启用的供应商。','Choose an active supplier.'));
     }
     if (savedOrderProvider[orderId] !== providerId) {
       await request(`operations/orders/${orderId}/assign-provider`, { provider_id: providerId, template_id: null, is_preferred: true });
@@ -1303,8 +1310,8 @@ async function exportSupplierOrder(orderId: string) {
     const response = await fetch(`/api/operations/orders/${orderId}/supplier-export?provider_id=${encodeURIComponent(providerId)}`, {
       headers: session.token ? { Authorization: `Bearer ${session.token}` } : {},
     });
-    await downloadResponseFile(response, `iswell-order-${orderId}.xlsx`);
-    notice.value = tx('已生成并下载 ISWELL 原始下单表。实际向工厂下单后，再点击“记录已向供应商下单”。','Generated and downloaded the original ISWELL order form. After placing the factory order, record it as ordered with the supplier.');
+    await downloadResponseFile(response, `vera-order-${orderId}.xlsx`);
+    notice.value = tx('已生成并下载 VERA 采购单。实际向工厂下单后，再点击“记录已向供应商下单”。','Generated and downloaded the VERA purchase order. After placing the factory order, record it as ordered with the supplier.');
   });
   supplierExportFeedback.value = error.value
     ? { kind: 'error', text: tx(`生成失败：${error.value}`, `Could not generate supplier order form: ${error.value}`) }
@@ -1331,8 +1338,8 @@ async function exportPickedSupplierOrders() {
       },
       body: JSON.stringify({ order_ids: targets.map(order => order.id) }),
     });
-    await downloadResponseFile(response, 'iswell-supplier-orders.zip');
-    notice.value = tx(`已生成并下载 ${targets.length} 份 ISWELL 原始下单表。`, `Generated and downloaded ${targets.length} original ISWELL order form(s).`);
+    await downloadResponseFile(response, 'vera-purchase-orders.zip');
+    notice.value = tx(`已生成并下载 ${targets.length} 份 VERA 采购单。`, `Generated and downloaded ${targets.length} VERA purchase order(s).`);
   });
   supplierExportFeedback.value = error.value
     ? { kind: 'error', text: tx(`生成失败：${error.value}`, `Could not generate supplier forms: ${error.value}`) }
@@ -1433,6 +1440,8 @@ async function loadOrderProviders(orderId: string) {
                 <p v-if="leadLabel(selectedOrder)"><strong>{{ tx("预计交期", "Lead time") }}:</strong> {{ leadLabel(selectedOrder) }}</p>
                 <p><strong>{{ tx("联系人", "Contact") }}:</strong> {{ selectedOrder.contact_name || "—" }} · {{ selectedOrder.phone || "—" }} · {{ selectedOrder.email || "—" }}</p>
                 <p><strong>{{ tx("公司地址", "Company address") }}:</strong> {{ selectedOrder.company_address || "—" }}</p>
+                <div v-if="admin" class="end-customer-edit"><label><strong>{{ tx('终端客户姓名','End customer name') }} · {{ tx('选填','Optional') }}</strong><input v-model="endCustomerNameDraft" maxlength="200" /></label><button type="button" class="secondary" :disabled="busy || endCustomerNameDraft === (selectedOrder.end_customer_name || '')" @click="saveEndCustomerName">{{ tx('保存','Save') }}</button></div>
+                <p v-else-if="selectedOrder.end_customer_name"><strong>{{ tx("终端客户姓名", "End customer name") }}:</strong> {{ selectedOrder.end_customer_name }}</p>
                 <p><strong>{{ tx("施工地址", "Site") }}:</strong> {{ selectedOrder.site_address || "—" }}</p>
                 <p><strong>{{ tx("提交日期", "Submitted") }}:</strong> {{ quoteDate(selectedOrder.created_at) }}</p>
                 <p><strong>{{ tx("订单日期（定金到账）", "Order date (deposit received)") }}:</strong> {{ quoteDate(selectedOrder.order_date) }}</p>
@@ -1512,10 +1521,9 @@ async function loadOrderProviders(orderId: string) {
                   <RouterLink to="/crm/providers">{{ tx('管理共享供应商','Manage shared suppliers') }}</RouterLink>
                 </div>
                 <p class="hint" v-if="!providers.some(p=>p.active)">{{ tx('尚无已启用供应商；先在供应商页面确认并启用。','No active supplier yet. Confirm and activate one under Suppliers.') }}</p>
-                <p class="hint" v-else-if="!orderProviderForm[selectedOrder.id].provider_id">{{ tx('先选择供应商。当前只有 ISWELL 原始 Excel 下单表已接入。','Choose a supplier first. Only the original ISWELL Excel form is currently connected.') }}</p>
+                <p class="hint" v-else-if="!orderProviderForm[selectedOrder.id].provider_id">{{ tx('先选择供应商。下单表将使用 VERA 统一格式。','Choose a supplier first. The export uses VERA’s standard purchase order format.') }}</p>
                 <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id && !providers.some(p=>p.id===orderProviderForm[selectedOrder.id].provider_id && p.active)">{{ tx('原供应商已停用，请重新选择已启用的供应商。','The assigned supplier is inactive; choose an active supplier.') }}</p>
-                <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id && !providerSupportsOrderForm(orderProviderForm[selectedOrder.id].provider_id)">{{ tx('该供应商的原始 Excel 模板尚未接入。系统不会用通用 VERA 表格代替供应商模板。','This supplier’s original Excel form is not connected yet. The system will not substitute the generic VERA sheet.') }}</p>
-                <p class="hint" v-else-if="providerSupportsOrderForm(orderProviderForm[selectedOrder.id].provider_id)">{{ tx('当前使用 ISWELL 原始订单表。特殊情况（如非标准安装或窗型）可在下载后手动调整。','The original ISWELL order form is connected. Edit exceptions such as non-standard mounting or window type in the downloaded workbook.') }}</p>
+                <p class="hint" v-else-if="providerSupportsOrderForm(orderProviderForm[selectedOrder.id].provider_id)">{{ tx('将生成 VERA 采购单格式，顶部包含订单号和终端客户姓名，明细沿用订单录入字段。','Exports a VERA purchase order with the order ID and end customer name at the top and the order-entry fields below.') }}</p>
                 <p v-if="['draft','pending_review'].includes(selectedOrder.status)" class="hint">{{ tx('订单需先提交并通过审核。','The order must be submitted and accepted before supplier ordering.') }}</p>
                 <p v-else-if="!['deposit_received','paid'].includes(selectedOrder.payment_status)" class="hint">{{ tx('确认收到定金后，才可生成供应商下单表。','Generate the supplier form only after confirming the deposit.') }}</p>
                 <div class="form-row supplier-form-actions">
@@ -1666,7 +1674,7 @@ async function loadOrderProviders(orderId: string) {
 
             <details>
               <summary>{{ tx("其他供应商模板映射（尚未用于下载）", "Other supplier mappings (not yet used for downloads)") }}</summary>
-            <p class="hint">{{ tx("ISWELL 已直接使用其原始 Excel 下单表。这里保存的列映射目前不会生成其他供应商的表格；其他供应商只有接入原始模板后才可下载。", "ISWELL downloads use its original Excel form. Mappings saved here do not yet generate forms for other suppliers; their original workbooks must be connected first.") }}</p>
+            <p class="hint">{{ tx("采购单下载统一使用 VERA 格式；此处的供应商列映射目前仅作记录，不会改变采购单内容。", "Purchase order downloads use VERA’s standard format. Supplier column mappings here are retained as reference and do not change the export.") }}</p>
             <h3>{{ tx("配置供应商输出模板", "Configure provider template") }}</h3>
             <form v-if="admin" @submit.prevent="createTemplate" class="template-form">
               <p v-if="templateForm.supersedes_id">{{ tx('正在创建新版本，历史模板不会修改','Creating a new revision; historical template stays unchanged') }} #{{ templateForm.supersedes_id }} <button type="button" @click="templateForm.supersedes_id=null">{{ tx('改为独立模板','Create a separate template') }}</button></p>
@@ -2689,4 +2697,5 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .orders-overview-table td:nth-child(3){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .orders-overview-table td small,.orders-overview-table .overview-order-link small{display:none!important}
 @media(max-width:700px){.order-overview{height:auto;max-height:none;min-height:60dvh}.overview-progress-edit{justify-content:flex-start;flex-wrap:wrap}.overview-progress-edit label{grid-template-columns:1fr}.order-global-search{max-width:none}.order-global-search input{width:100%}.shipment-workspace{height:auto;max-height:none;min-height:70dvh}.shipment-overview-scroll{min-height:280px}.staff-order-dialog{width:96vw;max-height:96dvh;padding-inline:5px}}
+.end-customer-edit{display:flex;align-items:end;gap:8px;margin:8px 0}.end-customer-edit label{display:grid;gap:4px;max-width:420px;margin:0}.end-customer-edit input{height:36px;min-height:36px;margin:0}
 </style>

@@ -11,6 +11,84 @@ from xml.etree import ElementTree as ET
 from excel_rules import column
 
 
+def export_vera_purchase_order(project):
+    """Create VERA's compact purchase order using the same fields as order entry."""
+    lines = project.get('lines') or []
+    if not lines:
+        raise ValueError('The order has no window lines to export')
+
+    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    ET.register_namespace('', ns)
+    headers = [
+        'Window Location / Name', 'Width (mm)', 'DROP (mm)', 'Material / Series',
+        'Opening Style', 'Panels', 'Layout Code', 'VT Post', 'HT Post', 'Midrail',
+        'Frame', 'Louver Size', 'Colour', 'Control Rod', 'Fitting',
+        'Add-ons / Special Request',
+    ]
+    rows = [
+        ['ORDER ID', project.get('order_number') or project.get('project_name') or project.get('id', ''),
+         '', 'END CUSTOMER NAME', project.get('end_customer_name') or ''],
+        [], headers,
+    ]
+    option_keys = ('opening_style', 'layout_code', 'vt_post', 'ht_post', 'midrail',
+                   'frame', 'louver_size', 'colour', 'control_rod', 'fitting')
+    for line in lines:
+        options = line.get('options') or {}
+        known = set(option_keys) | {'special_request'}
+        extra = [f'{key}: {value}' for key, value in options.items() if key not in known and value]
+        special = '; '.join(v for v in [options.get('special_request', ''), *extra] if v)
+        rows.append([
+            line.get('window_name', ''), line.get('width_mm', ''), line.get('height_mm', ''),
+            line.get('material') or line.get('product_name') or line.get('source_code') or '',
+            options.get('opening_style', ''), line.get('panel_count', 1),
+            *[options.get(key, '') for key in option_keys[1:]], special,
+        ])
+
+    sheet = ET.Element(f'{{{ns}}}worksheet')
+    views = ET.SubElement(sheet, f'{{{ns}}}sheetViews')
+    view = ET.SubElement(views, f'{{{ns}}}sheetView', {'workbookViewId': '0', 'showGridLines': '0'})
+    ET.SubElement(view, f'{{{ns}}}pane', {'ySplit': '3', 'topLeftCell': 'A4', 'activePane': 'bottomLeft', 'state': 'frozen'})
+    cols = ET.SubElement(sheet, f'{{{ns}}}cols')
+    widths = [25, 13, 13, 26, 22, 10, 18, 14, 14, 18, 20, 16, 18, 18, 16, 42]
+    for index, width in enumerate(widths, 1):
+        ET.SubElement(cols, f'{{{ns}}}col', {'min': str(index), 'max': str(index), 'width': str(width), 'customWidth': '1'})
+    data = ET.SubElement(sheet, f'{{{ns}}}sheetData')
+    for row_index, values in enumerate(rows, 1):
+        row = ET.SubElement(data, f'{{{ns}}}row', {'r': str(row_index), 'ht': '32' if row_index <= 3 else '28', 'customHeight': '1'})
+        for col_index, value in enumerate(values, 1):
+            if value in (None, ''):
+                continue
+            numeric = row_index > 3 and col_index in (2, 3, 6)
+            style = '1' if row_index == 1 else ('2' if row_index == 3 else '0')
+            cell = ET.SubElement(row, f'{{{ns}}}c', {
+                'r': column(col_index) + str(row_index), 's': style,
+                **({} if numeric else {'t': 'inlineStr'}),
+            })
+            if numeric:
+                ET.SubElement(cell, f'{{{ns}}}v').text = str(value)
+            else:
+                inline = ET.SubElement(cell, f'{{{ns}}}is')
+                ET.SubElement(inline, f'{{{ns}}}t').text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', str(value))
+    ET.SubElement(sheet, f'{{{ns}}}autoFilter', {'ref': f'A3:P{len(rows)}'})
+    ET.SubElement(sheet, f'{{{ns}}}pageMargins', {'left': '0.25', 'right': '0.25', 'top': '0.5', 'bottom': '0.5', 'header': '0.2', 'footer': '0.2'})
+    ET.SubElement(sheet, f'{{{ns}}}pageSetup', {'orientation': 'landscape', 'paperSize': '9', 'fitToWidth': '1', 'fitToHeight': '0'})
+
+    styles = f'''<styleSheet xmlns="{ns}"><fonts count="2"><font><sz val="10"/><name val="Arial"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Arial"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF465966"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFD6DEE3"/></left><right style="thin"><color rgb="FFD6DEE3"/></right><top style="thin"><color rgb="FFD6DEE3"/></top><bottom style="thin"><color rgb="FFD6DEE3"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'''
+    package = {
+        '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>',
+        '_rels/.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+        'xl/workbook.xml': f'<workbook xmlns="{ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="VERA Purchase Order" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        'xl/_rels/workbook.xml.rels': '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+        'xl/styles.xml': styles,
+        'xl/worksheets/sheet1.xml': ET.tostring(sheet, encoding='utf-8'),
+    }
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in package.items():
+            archive.writestr(name, content)
+    return output.getvalue()
+
+
 def export_supplier(project, customer, max_lines=29):
     lines = project.get('lines') or []
     if len(lines) > max_lines:

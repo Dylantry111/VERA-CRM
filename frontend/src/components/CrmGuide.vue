@@ -37,10 +37,10 @@ const steps = computed(() => [
     hint: tx("生成正确模板 · 记录已下单", "Generate the supplier form · record the order"),
     path: "/crm/projects",
     points: [
-      tx("定金到账后，在订单详情选择供应商，再点“生成并下载供应商下单表”。当前 ISWELL 会使用它的原始 Excel 模板；多选订单可一次下载一个 ZIP，内含每单的 Excel。", "After the deposit is received, choose the supplier in order details and select Generate & download supplier order form. ISWELL uses its original Excel workbook. Multiple orders download in one ZIP, with one Excel file per order."),
+      tx("定金到账后，在订单详情选择供应商，再点“生成并下载供应商下单表”。系统会下载 VERA 统一格式的采购单；多选订单可一次下载一个 ZIP，内含每单的 Excel。", "After the deposit is received, choose the supplier in order details and select Generate & download supplier order form. The VERA standard purchase order is downloaded. Multiple orders download in one ZIP, with one Excel file per order."),
       tx("核对下载文件并实际向工厂下单后，再点“记录已向供应商下单”。订单号沿用客户订单号。", "Review the downloaded form, place the factory order, then select Record placed with supplier. The customer order number is retained."),
     ],
-    note: tx("未接入原始模板的供应商不会生成通用替代表格；导出只下载文件，不会自动发送给供应商。", "A supplier without a connected original workbook cannot be exported. The system downloads forms only; it does not email suppliers."),
+    note: tx("导出会生成 VERA 统一格式的采购单；只下载文件，不会自动发送给供应商。", "The system downloads VERA purchase orders only; it does not email suppliers."),
   },
   {
     icon: Package,
