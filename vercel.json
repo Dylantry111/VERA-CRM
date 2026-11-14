@@ -47,7 +47,12 @@
     "backend": {
       "root": "backend/",
       "framework": "fastapi",
-      "entrypoint": "index:app"
+      "entrypoint": "index:app",
+      "functions": {
+        "index.py": {
+          "includeFiles": "templates/iswell_order_form.xlsx"
+        }
+      }
     }
   },
   "rewrites": [
