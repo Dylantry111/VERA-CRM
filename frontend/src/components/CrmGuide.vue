@@ -34,13 +34,13 @@ const steps = computed(() => [
   {
     icon: Truck,
     name: tx("供应商下单", "Supplier order"),
-    hint: tx("导出 Excel · 标为已下单", "Export Excel · mark as ordered"),
-    path: "/crm/providers",
+    hint: tx("生成正确模板 · 记录已下单", "Generate the supplier form · record the order"),
+    path: "/crm/projects",
     points: [
-      tx("到“供应商与导出”核对自动带出的供应商和模板，点“下载供应商订单 Excel”，分配同时被保存。", "Under Supplier & files, check the preselected supplier and template, then download the supplier Excel; the assignment is saved at the same time."),
-      tx("定金确认后下载供应商订单，再点“标为已下单”。订单号就是客户订单号，不用另填供应商号。", "After the deposit is confirmed, download the supplier order, then click Mark as ordered. The order number is the customer's; no separate supplier number."),
+      tx("定金到账后，在订单详情选择供应商，再点“生成并下载供应商下单表”。当前 ISWELL 会使用它的原始 Excel 模板；多选订单可一次下载一个 ZIP，内含每单的 Excel。", "After the deposit is received, choose the supplier in order details and select Generate & download supplier order form. ISWELL uses its original Excel workbook. Multiple orders download in one ZIP, with one Excel file per order."),
+      tx("核对下载文件并实际向工厂下单后，再点“记录已向供应商下单”。订单号沿用客户订单号。", "Review the downloaded form, place the factory order, then select Record placed with supplier. The customer order number is retained."),
     ],
-    note: tx("没有正式工厂模板时导出的只是通用草稿，需要人工核对；导出本身不会发邮件。", "Without a confirmed factory template the export is a generic draft to be checked by hand; exporting never sends email."),
+    note: tx("未接入原始模板的供应商不会生成通用替代表格；导出只下载文件，不会自动发送给供应商。", "A supplier without a connected original workbook cannot be exported. The system downloads forms only; it does not email suppliers."),
   },
   {
     icon: Package,
@@ -48,11 +48,11 @@ const steps = computed(() => [
     hint: tx("按运输批次更新进度", "Update progress by shipment batch"),
     path: "/crm/projects",
     points: [
-      tx("供应商发货后，在订单列表勾选订单，批量标记“在途”。", "After the supplier ships, tick the orders in the list and mark them in transit in one action."),
-      tx("运输批次标记为到仓后，批次内订单会自动更新为可提货；无需逐个订单录入到货件数。", "When a shipment batch is marked arrived at the warehouse, its orders automatically become ready for collection; arrival quantities do not need to be entered order by order."),
+      tx("在 Shipment 新建运输批次并粘贴订单号。订单加入已出厂批次后自动转为 In Transit；不再从订单页手动标记在途。", "Create a shipment batch under Shipment and paste order IDs. Orders in a factory-departed batch automatically become In Transit; do not set transit status from the order page."),
+      tx("运输批次到仓后，批次内所有订单自动更新为 Ready 并生成尾款账单草稿；无需逐个订单或逐窗录入到货件数。", "When a batch reaches the warehouse, all its orders automatically become Ready and balance invoice drafts are created. No per-order or per-window arrival counts are required."),
       tx("订单交付仍在订单明细中单独记录。", "Record collection or installation completion separately in the order details."),
     ],
-    note: tx("尾款开票以运输批次到仓和定金已收为准。", "Balance invoicing requires the shipment batch to be at the warehouse and the deposit to be received."),
+    note: tx("完成状态与付款状态分开跟踪，客户可以先提货、后付尾款。", "Order completion and payment are tracked separately; a customer may collect before paying the balance."),
   },
   {
     icon: Receipt,

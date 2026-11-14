@@ -293,7 +293,6 @@ const overviewSort = ref<{ key: string; direction: 1 | -1 }>({ key: 'submitted',
 const picked = ref<string[]>([]);
 const invoicePick = ref<string[]>([]);
 const mailPreview = ref<MailPreview | null>(null);
-const transitRows = ref<{ order_id: string; status: string; reason?: string }[]>([]);
 const batch = reactive<Record<string, number>>({});
 const orderNumberConfirmation = reactive<Record<string, boolean>>({});
 const operationKeys = new Map<string, string>();
@@ -312,17 +311,11 @@ const templateForm = reactive({
 const mappingField = ref("");
 const mappingColumn = ref("");
 const orderProviderForm = reactive<Record<string, { provider_id: number; template_id: number }>>({});
-function defaultTemplateId(providerId:number):number {
-  return [...providerTemplates.value].filter(t=>t.provider_id===providerId && t.active)
-    .sort((a,b)=>(b.revision||1)-(a.revision||1)||b.id-a.id)[0]?.id || 0;
-}
 function chooseProvider(orderId:string, providerId:number) {
-  orderProviderForm[orderId]={provider_id:providerId,template_id:defaultTemplateId(providerId)};
+  orderProviderForm[orderId]={provider_id:providerId,template_id:0};
 }
-function readySupplierExport(orderId:string) {
-  const form=orderProviderForm[orderId];
-  return !!form && providers.value.some(p=>p.id===form.provider_id && p.active) &&
-    providerTemplates.value.some(t=>t.id===form.template_id && t.provider_id===form.provider_id && t.active);
+function providerSupportsOrderForm(providerId:number) {
+  return providers.value.some(provider => provider.id === providerId && provider.active && provider.name.toLowerCase().includes('iswell'));
 }
 const activeSection = computed(() => (({pricing:'pricing',providers:'providers',finance:'settlement'} as Record<string,string>)[props.workspace] || 'operations'));
 const validFields = ["order_number", "order_id", "project_name", "company", "contact_name", "company_address", "site_address", "phone", "email", "window_name", "product_id", "width_mm", "height_mm", "quantity", "panel_count", "options", "arrived", "delivered"];
@@ -382,6 +375,25 @@ const detailSection = ref("order");
 const selectedOrder = computed(() => visibleOrders.value.find((order) => order.id === selectedId.value) || visibleOrders.value[0] || null);
 const selectedIsWholesale = computed(() => selectedOrder.value?.customer_type === 'wholesale' ||
   (!selectedOrder.value?.customer_type && customers.value.find(c => c.customer_id === selectedOrder.value?.customer_id)?.customer_type !== 'retail'));
+const selectedSupplierFormReady = computed(() => {
+  const order = selectedOrder.value;
+  const providerId = order ? orderProviderForm[order.id]?.provider_id : 0;
+  return !!order && !['draft', 'pending_review'].includes(order.status) && ['deposit_received', 'paid'].includes(order.payment_status) && providerSupportsOrderForm(providerId);
+});
+const pickedSupplierOrders = computed(() => orders.value.filter(order => picked.value.includes(order.id)));
+const pickedSupplierExportIssue = computed(() => {
+  if (!pickedSupplierOrders.value.length) return '';
+  if (pickedSupplierOrders.value.length > 100) return tx('一次最多生成 100 个订单的下单表。','Generate supplier forms for up to 100 orders at a time.');
+  const unreviewed = pickedSupplierOrders.value.filter(order => ['draft', 'pending_review'].includes(order.status));
+  if (unreviewed.length) return tx(`有 ${unreviewed.length} 个订单尚未审核确认。`, `${unreviewed.length} selected order(s) have not passed order review.`);
+  const unpaid = pickedSupplierOrders.value.filter(order => !['deposit_received', 'paid'].includes(order.payment_status));
+  if (unpaid.length) return tx(`有 ${unpaid.length} 个订单尚未确认收到定金。`, `${unpaid.length} selected order(s) do not have a confirmed deposit.`);
+  const unassigned = pickedSupplierOrders.value.filter(order => !orderProviderForm[order.id]?.provider_id);
+  if (unassigned.length) return tx(`有 ${unassigned.length} 个订单尚未选择供应商。请先在订单详情中选择供应商。`, `${unassigned.length} selected order(s) have no supplier. Choose a supplier in each order's details first.`);
+  const unsupported = pickedSupplierOrders.value.filter(order => !providerSupportsOrderForm(orderProviderForm[order.id]?.provider_id || 0));
+  if (unsupported.length) return tx(`目前只有 ISWELL 原始 Excel 模板已接入；另有 ${unsupported.length} 个订单的供应商没有可用模板。`, `Only the ISWELL original Excel form is connected; ${unsupported.length} selected order(s) use a supplier without a connected form.`);
+  return '';
+});
 function quoteMoney(amount?: string | null, currency = "NZD") {
   if (amount == null || amount === "") return "—";
   const value = Number(amount);
@@ -410,20 +422,24 @@ watch(()=>selectedOrder.value?.invoices?.map(i=>`${i.id}:${i.status}`).join('|')
 },{immediate:true});
 function nextOrderSection(order: ProjectOrder): string {
   if (order.status === 'pending_review') return 'order';
+  if (order.status === 'accepted' && order.payment_status === 'deposit_unpaid') return 'invoices';
+  if (order.status === 'accepted' || order.status === 'supplier_ordered') return 'supplier';
+  if (order.status === 'ready' || order.status === 'complete' && order.payment_status !== 'paid') return 'invoices';
   if (order.payment_status === 'deposit_unpaid') return 'invoices';
-  if (order.status === 'accepted') return 'supplier';
   return 'order';
 }
 const nextOrderHint = computed(() => {
   const order=selectedOrder.value;
   if (!order) return '';
+  if (order.status==='draft') return tx('客户尚未提交订单。草稿不进入审核、定金或供应商下单流程。','The customer has not submitted this draft. Drafts do not enter review, deposit or supplier-order steps.');
   if (order.status==='pending_review') return tx('核对价格和配置，再确认接收。','Check price and configuration, then accept review.');
-  if (order.payment_status==='deposit_unpaid') return tx('定金发票已生成；核实到账后记录定金已收。','The deposit invoice is ready; record receipt only after funds are confirmed.');
-  if (order.status==='accepted') return tx('定金确认后下载供应商订单，再标为已下单。','After the deposit is confirmed, download the supplier order, then mark it ordered.');
-  if (order.status==='supplier_ordered') return tx('供应商下单已记录；可将订单标为在途。','Supplier order recorded; mark it in transit when dispatched.');
-  if (order.status==='in_transit'||order.status==='partially_arrived') return tx('批次到仓后，订单会自动转为可提货。','When the shipment reaches the warehouse, its orders automatically become ready for collection.');
-  if (order.status==='arrived'||order.status==='ready'||order.status==='partially_delivered') return tx('货物已到，可记录提货或完成；账款在财务页单独跟进。','Goods are ready; record collection or completion. Track payment separately in finance.');
-  return tx('订单已完成；在账款与返利中处理尾款。','Order completed; complete the balance in Accounts & rebates.');
+  if (order.status==='accepted' && order.payment_status==='deposit_unpaid') return tx('发送定金账单并确认到账。只有确认收款后才生成供应商下单表；订单日期按定金到账日记录。','Send the deposit invoice and confirm receipt. Generate the supplier form only after payment is recorded; the order date uses the deposit-paid date.');
+  if (order.status==='accepted') return tx('选择供应商，生成并下载它的原始下单表；实际向工厂下单后，再记录“已向供应商下单”。','Choose the supplier and generate its original order form. Record “ordered with supplier” after you place the factory order.');
+  if (order.status==='supplier_ordered') return tx('到 Shipment 创建运输批次并加入此订单。订单匹配到批次后会自动转为 In Transit。','Create a shipment batch under Shipment and add this order. Assigning the order to a batch moves it to In Transit.');
+  if (order.status==='in_transit'||order.status==='partially_arrived') return tx('在 Shipment 更新批次节点。批次到仓时，所有订单自动转为 Ready 并生成尾款账单草稿，无需逐窗登记到货。','Update the batch milestones under Shipment. Warehouse arrival moves all its orders to Ready and creates balance invoice drafts; no per-window arrival entry is needed.');
+  if (order.status==='ready'||order.status==='arrived'||order.status==='partially_delivered') return tx('发送尾款账单，并在货物提取或安装完成后记录整单完成。付款和完成状态互相独立。','Send the balance invoice, then record completion after collection or installation. Payment and completion are tracked independently.');
+  if (order.status==='complete' && order.payment_status!=='paid') return tx('订单已完成；尾款仍可在发票与收款中跟进，不会阻止完成状态。','The order is complete. Follow up the outstanding balance under invoices and payments; payment does not block completion.');
+  return tx('订单和付款均已完成。','Order and payment are complete.');
 });
 watch(()=>[selectedOrder.value?.id,selectedOrder.value?.status,selectedOrder.value?.payment_status],()=>{
   if(selectedOrder.value) detailSection.value=nextOrderSection(selectedOrder.value);
@@ -664,12 +680,6 @@ function supplier(order: ProjectOrder) {
   });
 }
 
-async function exportBlocked(id: string) {
-  await act(async () => {
-    await request(`operations/orders/${id}/supplier-export`);
-  });
-}
-
 function toggleOrder(id: string) {
   picked.value = picked.value.includes(id) ? picked.value.filter((item) => item !== id) : [...picked.value, id];
 }
@@ -706,24 +716,6 @@ watch(createOrderOpen, async open => {
     if (createOrderOpen.value && staffOrderDialog.value && !staffOrderDialog.value.open) staffOrderDialog.value.showModal();
   } else if (staffOrderDialog.value?.open) staffOrderDialog.value.close();
 });
-async function applyBulkStatus(kind: 'accept' | 'deposit' | 'supplier') {
-  const targets = orders.value.filter(order => picked.value.includes(order.id));
-  if (!targets.length) return;
-  await act(async () => {
-    for (const order of targets) {
-      if (kind === 'accept' && order.status === 'pending_review') {
-        const body = order.order_number_confirmed === false
-          ? { order_number: order.order_number, confirm_order_number: true }
-          : {};
-        await request(`operations/orders/${order.id}/review`, body);
-      }
-      if (kind === 'deposit' && order.status !== 'pending_review' && order.payment_status === 'deposit_unpaid') await request(`operations/orders/${order.id}/deposit-received`, {});
-      if (kind === 'supplier' && order.status === 'accepted' && order.payment_status === 'deposit_received') await request(`operations/orders/${order.id}/supplier-order`, {});
-    }
-    picked.value = [];
-  });
-}
-
 function applyBulkProgress() {
   const orderIds = [...picked.value];
   if (!orderIds.length || (!bulkOrderStatus.value && !bulkPaymentStatus.value)) return;
@@ -757,37 +749,6 @@ async function receiveSelectedBalances() {
     }
     notice.value = received.length ? tx(`已确认 ${received.length} 张尾款账单收款。`, `Confirmed receipt for ${received.length} balance invoice(s).`) : "";
     if (failed.length) error.value = failed.join("; ");
-  });
-}
-
-function transitSelected() {
-  const ids = [...picked.value].sort();
-  if (!ids.length) {
-    error.value = tx("先勾选要标为在途的订单。", "Select the orders to mark in transit.");
-    return;
-  }
-  const signature = `transit:${ids.join(",")}`;
-  const operationKey = stableKey(signature);
-  return act(async () => {
-    const result = await request<{ results: { order_id: string; status: string; reason?: string }[] }>("operations/transit", {
-      order_ids: ids,
-      operation_key: operationKey,
-    });
-    operationKeys.delete(signature);
-    transitRows.value = result.results;
-    notice.value = result.results.map((row) => `${orderLabel(row.order_id)}: ${row.status}${row.reason ? ` (${row.reason})` : ""}`).join("; ");
-  });
-}
-
-function transitOne(id:string) {
-  const signature=`transit:${id}`;
-  const operationKey=stableKey(signature);
-  return act(async()=>{
-    const result=await request<{results:{order_id:string;status:string;reason?:string}[]}>('operations/transit',
-      {order_ids:[id],operation_key:operationKey});
-    operationKeys.delete(signature);
-    const row=result.results[0];
-    notice.value=row ? `${orderLabel(id)}: ${row.status}${row.reason?` (${row.reason})`:''}` : tx('状态未更新','Status was not updated');
   });
 }
 
@@ -1299,43 +1260,67 @@ function reviseTemplate(template:ProviderTemplate) {
 function saveApplicability(version:PricingVersion) { return act(async()=>{ await request(`operations/pricing-templates/${encodeURIComponent(version.id)}/applicability`,{provider_ids:applicability[version.id] || []}); notice.value=tx('已保存此版本的供应商适用范围','Supplier applicability saved for this version'); }); }
 function activateVersion(version:PricingVersion) { return act(async()=>{await request(`operations/pricing-templates/${encodeURIComponent(version.id)}/activate`,{}); notice.value=tx('已启用此价表；历史订单价格保持不变','Pricing version activated; historical prices unchanged');}); }
 
-// One download for every case: the export is the VERA Order sheet, and a chosen active supplier is saved with it.
+async function downloadResponseFile(response: Response, fallbackName: string) {
+  if (!response.ok) {
+    const data = (await response.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(typeof data.detail === 'string' ? data.detail : response.statusText);
+  }
+  const blob = await response.blob();
+  if (!blob.size) throw new Error(tx('服务器返回了空文件。','The server returned an empty file.'));
+  const url = URL.createObjectURL(blob);
+  const disposition = response.headers.get('content-disposition') || '';
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] || fallbackName;
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
 async function exportSupplierOrder(orderId: string) {
-  busy.value = true;
-  error.value = "";
-  notice.value = "";
-  try {
+  await act(async () => {
     const form = orderProviderForm[orderId];
-    const providerId = form?.provider_id && providers.value.some(p => p.id === form.provider_id && p.active) ? form.provider_id : 0;
-    if (providerId) {
-      const templateId = providerTemplates.value.some(t => t.id === form.template_id && t.provider_id === providerId && t.active) ? form.template_id : null;
-      await request(`operations/orders/${orderId}/assign-provider`, { provider_id: providerId, template_id: templateId, is_preferred: true });
+    const providerId = form?.provider_id || 0;
+    const order = orders.value.find(item => item.id === orderId);
+    if (order && ['draft', 'pending_review'].includes(order.status)) {
+      throw new Error(tx('订单必须先通过审核，才能生成供应商下单表。','Accept the order review before generating its supplier form.'));
     }
-    const response = await fetch(`/api/operations/orders/${orderId}/supplier-export`, {
+    if (order && !['deposit_received', 'paid'].includes(order.payment_status)) {
+      throw new Error(tx('确认收到定金后，才能生成供应商下单表。','Confirm the deposit before generating its supplier form.'));
+    }
+    if (!providerSupportsOrderForm(providerId)) {
+      throw new Error(tx('请选择已启用的 ISWELL 供应商，当前只有它的原始 Excel 下单表已接入。','Choose an active ISWELL supplier. Its original Excel order form is the only supplier form currently connected.'));
+    }
+    await request(`operations/orders/${orderId}/assign-provider`, { provider_id: providerId, template_id: null, is_preferred: true });
+    const response = await fetch(`/api/operations/orders/${orderId}/supplier-export?provider_id=${encodeURIComponent(providerId)}`, {
       headers: session.token ? { Authorization: `Bearer ${session.token}` } : {},
     });
-    if (!response.ok) {
-      const data = (await response.json().catch(() => ({}))) as { detail?: string };
-      throw new Error(typeof data.detail === "string" ? data.detail : response.statusText);
+    await downloadResponseFile(response, `iswell-order-${orderId}.xlsx`);
+    notice.value = tx('已生成并下载 ISWELL 原始下单表。实际向工厂下单后，再点击“记录已向供应商下单”。','Generated and downloaded the original ISWELL order form. After placing the factory order, record it as ordered with the supplier.');
+  });
+}
+
+async function exportPickedSupplierOrders() {
+  await act(async () => {
+    if (pickedSupplierExportIssue.value) throw new Error(pickedSupplierExportIssue.value);
+    const targets = [...pickedSupplierOrders.value];
+    for (const order of targets) {
+      const providerId = orderProviderForm[order.id].provider_id;
+      await request(`operations/orders/${order.id}/assign-provider`, { provider_id: providerId, template_id: null, is_preferred: true });
     }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const disposition = response.headers.get("content-disposition") || "";
-    const match = /filename="([^"]+)"/.exec(disposition);
-    const filename = match ? match[1] : `supplier-export-${orderId}.xlsx`;
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    link.click();
-    URL.revokeObjectURL(url);
-    notice.value = providerId
-      ? tx("已下载供应商订单，并保存了本单供应商。", "Downloaded the supplier order and saved this order's supplier.")
-      : tx("已下载供应商订单。", "Downloaded the supplier order.");
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
-  } finally {
-    busy.value = false;
-  }
+    const response = await fetch('/api/operations/orders/supplier-export-batch', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(session.token ? { Authorization: `Bearer ${session.token}` } : {}),
+      },
+      body: JSON.stringify({ order_ids: targets.map(order => order.id) }),
+    });
+    await downloadResponseFile(response, 'iswell-supplier-orders.zip');
+    notice.value = tx(`已生成并下载 ${targets.length} 份 ISWELL 原始下单表。`, `Generated and downloaded ${targets.length} original ISWELL order form(s).`);
+  });
 }
 
 async function loadOrderProviders(orderId: string) {
@@ -1345,7 +1330,7 @@ async function loadOrderProviders(orderId: string) {
       const first = assigned[0];
       orderProviderForm[orderId] = {
         provider_id: first.provider_id,
-        template_id: first.template_id || defaultTemplateId(first.provider_id),
+        template_id: first.template_id || 0,
       };
     } else {
       const active=providers.value.filter(p=>p.active);
@@ -1407,7 +1392,7 @@ async function loadOrderProviders(orderId: string) {
       </aside>
 
       <div class="detail-panel">
-        <div v-if="workspace === 'projects' && picked.length" class="card batch-toolbar"><strong>{{ tx('已选', 'Selected') }} {{ picked.length }}</strong><button :disabled="busy" @click="transitSelected">{{ tx('批量标为在途','Mark in transit') }}</button><button class="secondary" @click="picked = []">{{ tx('取消选择','Clear selection') }}</button><p v-if="transitRows.length">{{ notice }}</p></div>
+        <div v-if="workspace === 'projects' && picked.length" class="card batch-toolbar"><strong>{{ tx('已选', 'Selected') }} {{ picked.length }}</strong><button class="supplier-export-primary" :disabled="busy || !!pickedSupplierExportIssue" @click="exportPickedSupplierOrders">{{ tx('生成并下载供应商下单表','Generate & download supplier forms') }}</button><button class="secondary" @click="picked = []">{{ tx('取消选择','Clear selection') }}</button><p v-if="pickedSupplierExportIssue" class="hint">{{ pickedSupplierExportIssue }}</p></div>
 
         <div class="section-content">
           <section v-if="activeSection === 'operations'" class="card section-card">
@@ -1433,6 +1418,7 @@ async function loadOrderProviders(orderId: string) {
                 <p><strong>{{ tx("公司地址", "Company address") }}:</strong> {{ selectedOrder.company_address || "—" }}</p>
                 <p><strong>{{ tx("施工地址", "Site") }}:</strong> {{ selectedOrder.site_address || "—" }}</p>
                 <p><strong>{{ tx("提交日期", "Submitted") }}:</strong> {{ quoteDate(selectedOrder.created_at) }}</p>
+                <p><strong>{{ tx("订单日期（定金到账）", "Order date (deposit received)") }}:</strong> {{ quoteDate(selectedOrder.order_date) }}</p>
                 <p><strong>{{ tx("安装", "Installation") }}:</strong> {{ selectedOrder.installation_required ? tx("需要", "Required") : tx("不需要", "Not required") }}</p>
                 <p><strong>{{ tx("总价", "Total") }}:</strong> {{ selectedOrder.total ? `${selectedOrder.currency || ""} ${selectedOrder.total}` : tx("待计价", "Unpriced") }}</p>
                 <p v-if="selectedOrder.supplier_reference"><strong>{{ tx("供应商参考", "Supplier ref") }}:</strong> {{ selectedOrder.supplier_reference }}</p>
@@ -1442,7 +1428,7 @@ async function loadOrderProviders(orderId: string) {
                 <button type="button" :class="{active: detailSection === 'supplier'}" @click="detailSection = 'supplier'">{{ tx("供应商与导出", "Supplier & files") }}</button>
                 <button type="button" :class="{active: detailSection === 'invoices'}" @click="detailSection = 'invoices'">{{ tx("发票与收款", "Invoices & payments") }}</button>
                 <button type="button" :class="{active: detailSection === 'history'}" @click="detailSection = 'history'">{{ tx('操作记录','Activity') }}</button>
-              </nav><div class="next-action"><strong>{{ tx('建议下一步','Suggested next step') }}</strong><p>{{ nextOrderHint }}</p><RouterLink v-if="selectedOrder.status==='delivered' || selectedOrder.status==='complete' || (selectedOrder.payment_status==='deposit_received' && goodsArrived(selectedOrder))" :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('打开客户账款','Open customer accounts') }} →</RouterLink><button v-else-if="detailSection!==nextOrderSection(selectedOrder)" type="button" class="secondary" @click="detailSection=nextOrderSection(selectedOrder)">{{ tx('打开当前步骤','Open current step') }}</button></div></div>
+              </nav><div class="next-action"><strong>{{ tx('建议下一步','Suggested next step') }}</strong><p>{{ nextOrderHint }}</p><RouterLink v-if="selectedOrder.status==='supplier_ordered' || selectedOrder.status==='in_transit'" to="/crm/shipments">{{ tx('打开 Shipment 批次','Open shipment batches') }} →</RouterLink><RouterLink v-else-if="selectedOrder.status==='delivered' || selectedOrder.status==='complete' || (selectedOrder.payment_status==='deposit_received' && goodsArrived(selectedOrder))" :to="{path:'/crm/finance',query:{customer:selectedOrder.customer_id}}">{{ tx('打开客户账款','Open customer accounts') }} →</RouterLink><button v-else-if="detailSection!==nextOrderSection(selectedOrder)" type="button" class="secondary" @click="detailSection=nextOrderSection(selectedOrder)">{{ tx('打开当前步骤','Open current step') }}</button></div></div>
 <div v-show="detailSection === 'order'">              <div class="section-title-row"><h3>{{ tx('产品明细与客户提交配置','Product details and customer-submitted configuration') }}</h3><button type="button" class="secondary" @click="openSheetPreview">{{ tx('预览整单','Preview whole order') }}</button></div>
               <div class="table-scroll"><table class="quote-sheet">
                 <thead><tr>
@@ -1492,7 +1478,6 @@ async function loadOrderProviders(orderId: string) {
               </div>
               <h3 v-if="selectedOrder.status==='supplier_ordered' || ['in_transit','partially_arrived'].includes(selectedOrder.status) || goodsArrived(selectedOrder)">{{ tx("履约操作", "Fulfilment actions") }}</h3>
               <div class="actions">
-                <button v-if="selectedOrder.status==='supplier_ordered'" type="button" class="secondary" :disabled="busy" @click="transitOne(selectedOrder.id)">{{ tx('标为在途','Mark in transit') }}</button>
                 <button v-if="goodsArrived(selectedOrder) && selectedOrder.lines.some(line=>line.delivered<line.quantity)" type="button" class="secondary" :disabled="busy" @click="fulfil(selectedOrder)">{{ tx("记录整单交付", "Record whole-order completion") }}</button>
               </div>
               <p v-if="fulfilError" class="fulfil-error" role="alert">{{ fulfilError }}</p>
@@ -1507,24 +1492,21 @@ async function loadOrderProviders(orderId: string) {
                       <option v-for="p in providers.filter(p => p.active)" :key="p.id" :value="p.id">{{ p.name }}</option>
                     </select>
                   </label>
-                  <label v-if="orderProviderForm[selectedOrder.id].provider_id && providerTemplates.some(t=>t.provider_id===orderProviderForm[selectedOrder.id].provider_id && t.active)">{{ tx("选择模板", "Select template") }}
-                    <select v-model="orderProviderForm[selectedOrder.id].template_id">
-                      <option :value="0">{{ tx("默认", "Default") }}</option>
-                      <option v-for="t in providerTemplates.filter(t => t.provider_id === orderProviderForm[selectedOrder.id].provider_id && t.active)" :key="t.id" :value="t.id">{{ t.name }}</option>
-                    </select>
-                  </label>
                   <RouterLink to="/crm/providers">{{ tx('管理共享供应商','Manage shared suppliers') }}</RouterLink>
                 </div>
                 <p class="hint" v-if="!providers.some(p=>p.active)">{{ tx('尚无已启用供应商；先在供应商页面确认并启用。','No active supplier yet. Confirm and activate one under Suppliers.') }}</p>
+                <p class="hint" v-else-if="!orderProviderForm[selectedOrder.id].provider_id">{{ tx('先选择供应商。当前只有 ISWELL 原始 Excel 下单表已接入。','Choose a supplier first. Only the original ISWELL Excel form is currently connected.') }}</p>
                 <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id && !providers.some(p=>p.id===orderProviderForm[selectedOrder.id].provider_id && p.active)">{{ tx('原供应商已停用，请重新选择已启用的供应商。','The assigned supplier is inactive; choose an active supplier.') }}</p>
-                <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].template_id && !readySupplierExport(selectedOrder.id)">{{ tx('原输出模板已停用，请选择当前有效版本。','The assigned export template is inactive; choose a current revision.') }}</p>
-                <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id">{{ tx('下载供应商订单时会同时保存本单供应商。','Downloading the supplier order also saves this order’s supplier.') }}</p>
-                <p v-if="!['deposit_received','paid'].includes(selectedOrder.payment_status)" class="hint">{{ tx('定金确认后再导出给供应商。','Export the supplier file after the deposit is confirmed.') }}</p>
-                <div class="form-row">
-                  <button type="button" :disabled="busy || selectedOrder.status==='pending_review' || !['deposit_received','paid'].includes(selectedOrder.payment_status)" @click="exportSupplierOrder(selectedOrder.id)">{{ tx('下载供应商订单','Download supplier order') }}</button>
+                <p class="hint" v-else-if="orderProviderForm[selectedOrder.id].provider_id && !providerSupportsOrderForm(orderProviderForm[selectedOrder.id].provider_id)">{{ tx('该供应商的原始 Excel 模板尚未接入。系统不会用通用 VERA 表格代替供应商模板。','This supplier’s original Excel form is not connected yet. The system will not substitute the generic VERA sheet.') }}</p>
+                <p class="hint" v-else-if="providerSupportsOrderForm(orderProviderForm[selectedOrder.id].provider_id)">{{ tx('当前使用 ISWELL 原始订单表。特殊情况（如非标准安装或窗型）可在下载后手动调整。','The original ISWELL order form is connected. Edit exceptions such as non-standard mounting or window type in the downloaded workbook.') }}</p>
+                <p v-if="['draft','pending_review'].includes(selectedOrder.status)" class="hint">{{ tx('订单需先提交并通过审核。','The order must be submitted and accepted before supplier ordering.') }}</p>
+                <p v-else-if="!['deposit_received','paid'].includes(selectedOrder.payment_status)" class="hint">{{ tx('确认收到定金后，才可生成供应商下单表。','Generate the supplier form only after confirming the deposit.') }}</p>
+                <div class="form-row supplier-form-actions">
+                  <button type="button" class="supplier-export-primary" :disabled="busy || !selectedSupplierFormReady" @click="exportSupplierOrder(selectedOrder.id)">{{ tx('生成并下载供应商下单表','Generate & download supplier order form') }}</button>
                 </div>
               </div>
-              <div v-if="selectedOrder.status==='accepted' && selectedOrder.payment_status==='deposit_received'" class="actions"><button type="button" :disabled="busy" @click="supplier(selectedOrder)">{{ tx('标为已下单','Mark as ordered') }}</button></div>
+              <div v-if="selectedOrder.status==='accepted' && ['deposit_received','paid'].includes(selectedOrder.payment_status)" class="actions supplier-order-record"><button type="button" :disabled="busy" @click="supplier(selectedOrder)">{{ tx('记录已向供应商下单','Record placed with supplier') }}</button></div>
+              <div v-else-if="selectedOrder.status==='supplier_ordered' || selectedOrder.status==='in_transit'" class="shipment-workflow-note"><strong>{{ tx('下一步在 Shipment 完成','Continue under Shipment') }}</strong><p>{{ nextOrderHint }}</p><RouterLink class="button-link" to="/crm/shipments">{{ tx('打开 Shipment','Open Shipment') }} →</RouterLink></div>
 
 </div><div v-show="detailSection === 'order'">
               <div class="pricing-basis"><h3>{{ tx('本单计价依据','Pricing applied to this order') }}</h3><p v-for="version in [...new Set(selectedOrder.lines.map(l=>l.rule_version).filter(Boolean))]" :key="version"><RouterLink :to="{path:'/crm/pricing',query:{version}}">{{ tx('定价版本','Pricing version') }} {{ version?.slice(0,12) }}</RouterLink></p><span v-if="selectedOrder.status !== 'pending_review'">{{ tx('审核后价格已冻结','Prices frozen after acceptance') }}</span></div>
@@ -1665,8 +1647,8 @@ async function loadOrderProviders(orderId: string) {
             </details>
 
             <details>
-              <summary>{{ tx("字段列映射（不改变当前下载的供应商订单）", "Column mapping (does not change the downloaded supplier order)") }}</summary>
-            <p class="hint">{{ tx("这里的列映射只作记录。订单页下载的供应商订单不读取这张表。ISWELL 原表另做。", "These column mappings are a record only. The supplier file downloaded from an order does not use this table. Filling the ISWELL workbook is separate.") }}</p>
+              <summary>{{ tx("其他供应商模板映射（尚未用于下载）", "Other supplier mappings (not yet used for downloads)") }}</summary>
+            <p class="hint">{{ tx("ISWELL 已直接使用其原始 Excel 下单表。这里保存的列映射目前不会生成其他供应商的表格；其他供应商只有接入原始模板后才可下载。", "ISWELL downloads use its original Excel form. Mappings saved here do not yet generate forms for other suppliers; their original workbooks must be connected first.") }}</p>
             <h3>{{ tx("配置供应商输出模板", "Configure provider template") }}</h3>
             <form v-if="admin" @submit.prevent="createTemplate" class="template-form">
               <p v-if="templateForm.supersedes_id">{{ tx('正在创建新版本，历史模板不会修改','Creating a new revision; historical template stays unchanged') }} #{{ templateForm.supersedes_id }} <button type="button" @click="templateForm.supersedes_id=null">{{ tx('改为独立模板','Create a separate template') }}</button></p>
@@ -1882,6 +1864,8 @@ async function loadOrderProviders(orderId: string) {
           </label>
           <button type="button" :disabled="busy || !picked.length || (!bulkOrderStatus && !bulkPaymentStatus)" @click="applyBulkProgress">{{ tx('应用到所选订单','Apply to selected orders') }}</button>
           <button type="button" class="secondary" :disabled="busy || !picked.length" @click="openBalanceInvoiceForPicked">{{ tx('生成尾款账单','Create balance invoice') }}</button>
+          <button type="button" class="supplier-export-primary" :disabled="busy || !picked.length || !!pickedSupplierExportIssue" @click="exportPickedSupplierOrders">{{ tx('生成并下载供应商下单表','Generate & download supplier forms') }}</button>
+          <small v-if="pickedSupplierExportIssue" class="supplier-export-issue">{{ pickedSupplierExportIssue }}</small>
         </div>
       </div>
       <div class="overview-scroll"><table class="orders-overview-table"><colgroup><col class="col-select"/><col class="col-order-id"/><col class="col-customer"/><col class="col-submitted"/><col class="col-status"/><col class="col-payment"/><col class="col-money"/><col class="col-date"/><col class="col-money"/><col class="col-date"/><col class="col-date"/><col class="col-date"/><col class="col-batch"/></colgroup><thead>
@@ -2241,7 +2225,7 @@ td input { width: 80px; padding: 6px 8px; border: 1px solid #d5ddd6; border-radi
 .global-workspace .workspace-grid{grid-template-columns:minmax(0,1fr)}
 .global-workspace .detail-panel{width:100%;min-width:0}.global-workspace .section-card{max-width:1200px;margin:0 auto}
 .template-card,.template-status{overflow-wrap:anywhere}.checkbox-label{display:flex;align-items:center;gap:8px;min-height:44px}.checkbox-label input[type=checkbox]{width:20px;height:20px;min-height:20px;flex:none}
-.batch-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px}.batch-toolbar button,.global-workspace button{min-height:44px}.finance-order{display:flex;flex-wrap:wrap;gap:12px;align-items:center;border-bottom:1px solid #e1e6df;padding:8px 0}.finance-order label{margin:0}.highlight{border:2px solid #17523a}.global-workspace a{color:#17523a;text-decoration:underline}.global-workspace select{max-width:100%}
+.batch-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:12px}.batch-toolbar button,.global-workspace button{min-height:44px}.supplier-export-primary{background:#465966!important;color:#fff!important;border:1px solid #465966!important;border-radius:999px!important;font-weight:750!important;padding-inline:18px!important;box-shadow:0 2px 5px #24374622}.supplier-export-primary:hover:not(:disabled){background:#354956!important;color:#fff!important}.supplier-export-primary:disabled{opacity:.48;cursor:not-allowed}.supplier-form-actions{margin-top:12px}.supplier-order-record{margin-top:12px}.shipment-workflow-note{margin-top:12px;padding:14px;background:#f1f5f7;border:1px solid #d3dee4;border-radius:8px}.shipment-workflow-note p{margin:6px 0 10px}.shipment-workflow-note .button-link{display:inline-flex;align-items:center;min-height:38px}.supplier-export-issue{flex-basis:100%;color:#8e4e26}.batch-toolbar .hint{flex-basis:100%;margin:0}.finance-order{display:flex;flex-wrap:wrap;gap:12px;align-items:center;border-bottom:1px solid #e1e6df;padding:8px 0}.finance-order label{margin:0}.highlight{border:2px solid #17523a}.global-workspace a{color:#17523a;text-decoration:underline}.global-workspace select{max-width:100%}
 @media(max-width:700px){.global-workspace .section-card{padding:12px}.global-workspace .form-grid{grid-template-columns:minmax(0,1fr)}.global-workspace .mapping-controls{display:flex;flex-wrap:wrap}.global-workspace .mapping-controls>*{min-width:0;max-width:100%}.finance-order{display:block}}
 .global-workspace .template-card{padding:14px;margin-top:12px}.global-workspace .template-card h3,.global-workspace .template-card h4{margin:8px 0}.global-workspace .template-card p{margin:6px 0}.resource-orders{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 16px}.resource-orders p{margin:0!important}.resource-orders a{min-height:44px}.pick-mark{min-width:44px;min-height:44px}.global-workspace .template-card>.checkbox-label{display:inline-flex;margin-right:20px}@media(max-width:700px){.resource-orders{grid-template-columns:minmax(0,1fr)}}
 .desk .order-pick{grid-template-columns:minmax(0,1fr);justify-content:stretch;justify-items:stretch;text-align:left;min-height:44px}

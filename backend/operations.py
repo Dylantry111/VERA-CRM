@@ -920,6 +920,10 @@ class Supplier(Input):
     reference: str | None = Field(default=None, max_length=200)
 
 
+class SupplierExportBatch(Input):
+    order_ids: list[str] = Field(min_length=1, max_length=100)
+
+
 class Batch(Input):
     order_ids: list[str] = Field(min_length=1, max_length=100)
     operation_key: str = Field(min_length=8, max_length=100)
@@ -3772,7 +3776,7 @@ def register(app, s):
         with s.db() as c:
             c.execute('BEGIN IMMEDIATE')
             d = get(c, oid, 'project')
-            if d['payment_status'] != 'deposit_received':
+            if d['payment_status'] not in ('deposit_received', 'paid'):
                 raise HTTPException(409, 'Confirm the deposit before supplier ordering')
             if d['status'] == 'accepted':
                 d['status'] = 'supplier_ordered'
@@ -3789,32 +3793,86 @@ def register(app, s):
                 put(c, 'project', d, d['customer_id'])
             return enrich(c, d)
 
-    @app.get('/api/operations/orders/{oid}/supplier-export')
-    def supplier_export(oid: str, provider_id: int | None = None, allow_basic_fallback: bool = False, actor=Depends(s.auth)):
+    def build_supplier_export(c, oid, provider_id=None):
         import json
+        from supplier_exports import export_iswell
+        d = get(c, oid, 'project')
+        if d.get('status') in ('draft', 'pending_review'):
+            raise HTTPException(409, f"{d.get('order_number') or oid}: accept the order review before generating the supplier order form")
+        if d.get('payment_status') not in ('deposit_received', 'paid'):
+            raise HTTPException(409, f"{d.get('order_number') or oid}: confirm the deposit before generating the supplier order form")
+        if not provider_id:
+            assigned = c.execute('''
+                SELECT p.id,p.name,p.active FROM order_providers op
+                JOIN providers p ON p.id=op.provider_id
+                WHERE op.order_id=? ORDER BY op.is_preferred DESC,op.assigned_at LIMIT 1
+            ''', (oid,)).fetchone()
+            provider = assigned
+        else:
+            provider = c.execute('SELECT id,name,active FROM providers WHERE id=?', (provider_id,)).fetchone()
+        if not provider:
+            raise HTTPException(409, f"{d.get('order_number') or oid}: assign a supplier before generating its order form")
+        if not provider['active']:
+            raise HTTPException(409, f"{d.get('order_number') or oid}: the assigned supplier is inactive")
+        if 'iswell' not in str(provider['name']).lower():
+            raise HTTPException(409, f"{d.get('order_number') or oid}: no original Excel order form is connected for {provider['name']}; the generic VERA sheet is not used")
+        products = {row['id']: json.loads(row['data']) for row in c.execute('SELECT id,data FROM products')}
+        export_lines = []
+        for line in d.get('lines') or []:
+            product = products.get(line.get('product_id'), {})
+            export_lines.append({**line, 'product_category': product.get('category'),
+                                 'source_code': line.get('source_code') or product.get('source_code'),
+                                 'product_name': product.get('name_en'),
+                                 'material': line.get('material') or product.get('material') or product.get('material_en')})
+        try:
+            raw = export_iswell({**d, 'lines': export_lines})
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        order_reference = re.sub(r'[^A-Za-z0-9_-]+', '-', str(d.get('order_number') or d.get('project_name') or oid)).strip('-')[:80]
+        return d, provider, raw, f'iswell-order-{order_reference}.xlsx'
+
+    @app.get('/api/operations/orders/{oid}/supplier-export')
+    def supplier_export(oid: str, provider_id: int | None = None, actor=Depends(s.auth)):
         from fastapi.responses import Response
-        from supplier_exports import export_supplier
         with s.db() as c:
-            d = get(c, oid, 'project')
-            # A paid order has necessarily had its deposit received.
-            if d.get('payment_status') not in ('deposit_received', 'paid'):
-                raise HTTPException(409, 'Confirm the deposit before exporting the supplier order')
-            customer = profile(c, d['customer_id'])
-            products = {row['id']: json.loads(row['data']) for row in c.execute('SELECT id,data FROM products')}
-            export_lines = []
-            for line in d.get('lines') or []:
-                product = products.get(line.get('product_id'), {})
-                export_lines.append({**line, 'product_category': product.get('category'),
-                                     'source_code': line.get('source_code') or product.get('source_code'),
-                                     'product_name': product.get('name_en')})
-            try:
-                raw = export_supplier({**d, 'lines': export_lines}, customer)
-            except ValueError as error:
-                raise HTTPException(422, str(error)) from None
-            event(d, 'supplier_exported', actor, format='VERA Order')
+            d, provider, raw, filename = build_supplier_export(c, oid, provider_id)
+            event(d, 'supplier_exported', actor, format='ISWELL original form', provider_id=provider['id'])
             put(c, 'project', d, d['customer_id'])
         return Response(raw, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                        headers={'Content-Disposition': 'attachment; filename="vera-supplier-order.xlsx"', 'Cache-Control': 'no-store'})
+                        headers={'Content-Disposition': f'attachment; filename="{filename}"', 'Cache-Control': 'no-store'})
+
+    @app.post('/api/operations/orders/supplier-export-batch')
+    def supplier_export_batch(body: SupplierExportBatch, actor=Depends(s.auth)):
+        import io
+        import zipfile
+        from fastapi.responses import Response
+        order_ids = list(dict.fromkeys(body.order_ids))
+        with s.db() as c:
+            exports = []
+            for oid in order_ids:
+                assigned = c.execute('''
+                    SELECT p.id FROM order_providers op
+                    JOIN providers p ON p.id=op.provider_id
+                    WHERE op.order_id=? ORDER BY op.is_preferred DESC,op.assigned_at LIMIT 1
+                ''', (oid,)).fetchone()
+                d, provider, raw, filename = build_supplier_export(c, oid, assigned['id'] if assigned else None)
+                exports.append((d, provider, raw, filename))
+
+            archive = io.BytesIO()
+            used_names = set()
+            with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as bundle:
+                for _order, _provider, raw, filename in exports:
+                    name = filename
+                    if name in used_names:
+                        stem, ext = os.path.splitext(name)
+                        name = f'{stem}-{_order["id"][-8:]}{ext}'
+                    used_names.add(name)
+                    bundle.writestr(name, raw)
+            for d, provider, _raw, _filename in exports:
+                event(d, 'supplier_exported', actor, format='ISWELL original form', provider_id=provider['id'], batch=True)
+                put(c, 'project', d, d['customer_id'])
+        return Response(archive.getvalue(), media_type='application/zip',
+                        headers={'Content-Disposition': 'attachment; filename="iswell-supplier-orders.zip"', 'Cache-Control': 'no-store'})
     def project_export(oid,kind):
         from fastapi.responses import Response
         from order_exports import export_project
