@@ -159,7 +159,7 @@ def list_messages(email_address, password, folder, limit=50):
             if not isinstance(item, tuple) or len(item) < 2 or not isinstance(item[1], bytes):
                 continue
             meta = item[0].decode('ascii', errors='ignore')
-            uid_match = re.search(r'\\bUID\s+(\d+)', meta)
+            uid_match = re.search(r'\bUID\s+(\d+)', meta)
             if not uid_match:
                 continue
             header = BytesParser(policy=policy.default).parsebytes(item[1])
